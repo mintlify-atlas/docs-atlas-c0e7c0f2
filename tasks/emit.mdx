@@ -1,0 +1,579 @@
+---
+title: Emit Task
+description: Publish CloudEvents to event brokers and messaging systems
+---
+
+The Emit task publishes CloudEvents to event brokers, enabling event-driven architectures and workflow coordination.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: emit-event
+  version: '1.0.0'
+do:
+  - processOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/orders
+        body: "${ .order }"
+  
+  - notifyOrderProcessed:
+      emit:
+        event:
+          with:
+            source: order-service
+            type: com.example.order.processed
+            subject: "${ .body.orderId }"
+            data:
+              orderId: "${ .body.orderId }"
+              customerId: "${ .order.customerId }"
+              total: "${ .body.total }"
+              status: processed
+```
+
+## CloudEvents Format
+
+Emitted events follow the [CloudEvents](https://cloudevents.io/) specification:
+
+```yaml
+emit:
+  event:
+    with:
+      source: "https://api.example.com"  # Event source
+      type: "com.example.event.type"      # Event type
+      subject: "event-subject"             # Optional subject
+      datacontenttype: "application/json" # Optional content type
+      data:                                 # Event payload
+        key: value
+```
+
+## Complete Examples
+
+### Order Lifecycle Events
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-lifecycle
+  version: '1.0.0'
+do:
+  - createOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/orders
+        body:
+          customerId: "${ .customerId }"
+          items: "${ .items }"
+      output:
+        as: order
+  
+  - emitOrderCreated:
+      emit:
+        event:
+          with:
+            source: order-service
+            type: com.example.order.created
+            subject: "${ .order.orderId }"
+            data:
+              orderId: "${ .order.orderId }"
+              customerId: "${ .order.customerId }"
+              items: "${ .order.items }"
+              total: "${ .order.total }"
+              createdAt: "${ now() }"
+  
+  - processPayment:
+      call: http
+      with:
+        method: post
+        endpoint: https://payments.example.com/api/charge
+        body:
+          orderId: "${ .order.orderId }"
+          amount: "${ .order.total }"
+      output:
+        as: payment
+  
+  - emitPaymentProcessed:
+      emit:
+        event:
+          with:
+            source: payment-service
+            type: com.example.payment.processed
+            subject: "${ .order.orderId }"
+            data:
+              orderId: "${ .order.orderId }"
+              paymentId: "${ .payment.paymentId }"
+              amount: "${ .payment.amount }"
+              status: "${ .payment.status }"
+              processedAt: "${ now() }"
+  
+  - fulfillOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://fulfillment.example.com/api/fulfill
+        body:
+          orderId: "${ .order.orderId }"
+      output:
+        as: fulfillment
+  
+  - emitOrderFulfilled:
+      emit:
+        event:
+          with:
+            source: fulfillment-service
+            type: com.example.order.fulfilled
+            subject: "${ .order.orderId }"
+            data:
+              orderId: "${ .order.orderId }"
+              trackingNumber: "${ .fulfillment.trackingNumber }"
+              carrier: "${ .fulfillment.carrier }"
+              estimatedDelivery: "${ .fulfillment.estimatedDelivery }"
+              fulfilledAt: "${ now() }"
+```
+
+### Error Notification
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: error-notification
+  version: '1.0.0'
+do:
+  - processRequest:
+      try:
+        - callExternalService:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/process
+              body: "${ .request }"
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: processingError
+        do:
+          - emitErrorEvent:
+              emit:
+                event:
+                  with:
+                    source: workflow-engine
+                    type: com.example.processing.failed
+                    subject: "${ .request.id }"
+                    data:
+                      requestId: "${ .request.id }"
+                      errorType: "${ $processingError.type }"
+                      errorMessage: "${ $processingError.title }"
+                      errorDetails: "${ $processingError.detail }"
+                      timestamp: "${ now() }"
+          
+          - notifySupport:
+              call: http
+              with:
+                method: post
+                endpoint: https://notifications.example.com/api/send
+                body:
+                  channel: support
+                  message: Processing failed for request ${ .request.id }
+```
+
+### IoT Device Events
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: iot
+  name: device-monitoring
+  version: '1.0.0'
+do:
+  - collectTelemetry:
+      call: http
+      with:
+        method: get
+        endpoint: https://iot.example.com/api/devices/{deviceId}/telemetry
+      output:
+        as: telemetry
+  
+  - analyzeTelemetry:
+      set:
+        status:
+          temperature: "${ .telemetry.temperature }"
+          isNormal: "${ .telemetry.temperature >= 20 and .telemetry.temperature <= 25 }"
+          alert: "${ .telemetry.temperature > 30 or .telemetry.temperature < 10 }"
+  
+  - emitStatusUpdate:
+      emit:
+        event:
+          with:
+            source: "iot://devices/${ .deviceId }"
+            type: com.example.iot.status.updated
+            subject: "${ .deviceId }"
+            data:
+              deviceId: "${ .deviceId }"
+              temperature: "${ .status.temperature }"
+              status: "${ .status.isNormal ? 'normal' : 'abnormal' }"
+              timestamp: "${ now() }"
+  
+  - emitAlert:
+      if: "${ .status.alert }"
+      emit:
+        event:
+          with:
+            source: "iot://devices/${ .deviceId }"
+            type: com.example.iot.alert.critical
+            subject: "${ .deviceId }"
+            data:
+              deviceId: "${ .deviceId }"
+              temperature: "${ .status.temperature }"
+              severity: critical
+              message: Temperature out of safe range
+              timestamp: "${ now() }"
+```
+
+### Workflow State Changes
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: workflow-state-events
+  version: '1.0.0'
+do:
+  - emitWorkflowStarted:
+      emit:
+        event:
+          with:
+            source: "${ $workflow.id }"
+            type: com.example.workflow.started
+            subject: "${ $workflow.id }"
+            data:
+              workflowId: "${ $workflow.id }"
+              workflowName: "${ $workflow.name }"
+              input: "${ $workflow.input }"
+              startedAt: "${ now() }"
+  
+  - validateInput:
+      call: http
+      with:
+        method: post
+        endpoint: https://validation.example.com/api/validate
+        body: "${ $workflow.input }"
+  
+  - emitValidationCompleted:
+      emit:
+        event:
+          with:
+            source: "${ $workflow.id }"
+            type: com.example.workflow.validated
+            subject: "${ $workflow.id }"
+            data:
+              workflowId: "${ $workflow.id }"
+              valid: "${ .body.valid }"
+              validatedAt: "${ now() }"
+  
+  - processData:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/process
+        body: "${ .body.validatedData }"
+  
+  - emitWorkflowCompleted:
+      emit:
+        event:
+          with:
+            source: "${ $workflow.id }"
+            type: com.example.workflow.completed
+            subject: "${ $workflow.id }"
+            data:
+              workflowId: "${ $workflow.id }"
+              result: "${ .body }"
+              completedAt: "${ now() }"
+```
+
+### Multi-Channel Notifications
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: multi-channel-notify
+  version: '1.0.0'
+do:
+  - processUserAction:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/actions
+        body: "${ .action }"
+  
+  - emitEmailNotification:
+      emit:
+        event:
+          with:
+            source: notification-service
+            type: com.example.notification.email
+            subject: "${ .action.userId }"
+            data:
+              userId: "${ .action.userId }"
+              template: action_completed
+              channel: email
+              data:
+                actionType: "${ .action.type }"
+                completedAt: "${ now() }"
+  
+  - emitPushNotification:
+      emit:
+        event:
+          with:
+            source: notification-service
+            type: com.example.notification.push
+            subject: "${ .action.userId }"
+            data:
+              userId: "${ .action.userId }"
+              title: Action Completed
+              body: "Your ${ .action.type } action has been completed"
+              channel: push
+  
+  - emitAnalyticsEvent:
+      emit:
+        event:
+          with:
+            source: analytics-service
+            type: com.example.analytics.action
+            subject: "${ .action.userId }"
+            data:
+              userId: "${ .action.userId }"
+              actionType: "${ .action.type }"
+              actionId: "${ .body.actionId }"
+              duration: "${ .body.duration }"
+              timestamp: "${ now() }"
+```
+
+## Configuration
+
+### event.with (required)
+
+Defines the CloudEvent properties:
+
+#### source (required)
+
+Identifies the event source:
+
+```yaml
+emit:
+  event:
+    with:
+      source: "https://api.example.com/orders"
+      # or
+      source: "order-service"
+      # or
+      source: "iot://device/${ .deviceId }"
+```
+
+#### type (required)
+
+Specifies the event type using reverse DNS notation:
+
+```yaml
+emit:
+  event:
+    with:
+      type: "com.example.order.created"
+      # or
+      type: "io.mycompany.user.registered.v1"
+```
+
+#### subject (optional)
+
+Describes what the event is about:
+
+```yaml
+emit:
+  event:
+    with:
+      subject: "order-12345"
+      # or
+      subject: "${ .orderId }"
+```
+
+#### data (required)
+
+The event payload:
+
+```yaml
+emit:
+  event:
+    with:
+      data:
+        orderId: "${ .orderId }"
+        status: "${ .status }"
+        # Any valid JSON structure
+```
+
+#### Additional CloudEvents Attributes
+
+```yaml
+emit:
+  event:
+    with:
+      source: order-service
+      type: com.example.order.created
+      datacontenttype: "application/json"
+      dataschema: "https://example.com/schemas/order.json"
+      time: "${ now() }"  # Defaults to current time
+      data:
+        # ...
+```
+
+## Event Correlation
+
+Use consistent subjects for event correlation:
+
+```yaml
+do:
+  - emitRequestStarted:
+      emit:
+        event:
+          with:
+            source: processor
+            type: com.example.request.started
+            subject: "${ .requestId }"  # Correlation ID
+            data:
+              requestId: "${ .requestId }"
+              startedAt: "${ now() }"
+  
+  # ... processing ...
+  
+  - emitRequestCompleted:
+      emit:
+        event:
+          with:
+            source: processor
+            type: com.example.request.completed
+            subject: "${ .requestId }"  # Same correlation ID
+            data:
+              requestId: "${ .requestId }"
+              result: "${ .result }"
+              completedAt: "${ now() }"
+```
+
+## Event Versioning
+
+Include version in event types:
+
+```yaml
+emit:
+  event:
+    with:
+      source: api-service
+      type: com.example.user.created.v2  # Version in type
+      data:
+        userId: "${ .userId }"
+        version: "2.0"  # Also in payload if needed
+```
+
+## Best Practices
+
+1. **Use meaningful event types** - Follow reverse DNS notation (com.example.resource.action)
+2. **Include correlation IDs** - Use subject for event correlation
+3. **Add timestamps** - Include event timestamp in data
+4. **Version your events** - Add version to event type or data
+5. **Keep events focused** - Each event should represent a single occurrence
+6. **Include context** - Add relevant metadata (user ID, session ID, etc.)
+7. **Document event schemas** - Define clear contracts for event consumers
+8. **Use CloudEvents standard** - Follow CloudEvents specification
+
+## Common Patterns
+
+### Event Choreography
+
+```yaml
+# Service A emits event
+- emitOrderCreated:
+    emit:
+      event:
+        with:
+          type: com.example.order.created
+          data: "${ .order }"
+
+# Service B listens and reacts
+- listenForOrder:
+    listen:
+      to:
+        one:
+          with:
+            type: com.example.order.created
+```
+
+### Saga Pattern
+
+```yaml
+# Emit compensation events for rollback
+- emitCompensation:
+    emit:
+      event:
+        with:
+          type: com.example.order.cancelled
+          subject: "${ .orderId }"
+          data:
+            orderId: "${ .orderId }"
+            reason: compensation
+```
+
+### Audit Trail
+
+```yaml
+# Emit audit events for all state changes
+- emitAuditEvent:
+    emit:
+      event:
+        with:
+          type: com.example.audit.state_changed
+          data:
+            entityId: "${ .entityId }"
+            oldState: "${ .oldState }"
+            newState: "${ .newState }"
+            changedBy: "${ .userId }"
+            changedAt: "${ now() }"
+```
+
+## Error Handling
+
+Emit tasks typically don't fail, but you can handle broker unavailability:
+
+```yaml
+- safeEmit:
+    try:
+      - publishEvent:
+          emit:
+            event:
+              with:
+                type: com.example.event
+                data: "${ .data }"
+    catch:
+      errors:
+        with:
+          type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+      retry:
+        delay:
+          seconds: 2
+        backoff:
+          exponential: {}
+        limit:
+          attempt:
+            count: 3
+```
+
+## Related Topics
+
+- [Listen Task](/tasks/listen) - Consume events
+- [Call Task](/tasks/call) - AsyncAPI integration
+- [Try/Catch](/tasks/try-catch) - Handle emit failures

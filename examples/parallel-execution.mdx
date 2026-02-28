@@ -1,0 +1,379 @@
+---
+title: Parallel Execution
+description: Execute multiple tasks concurrently with fork
+icon: code-branch
+---
+
+Lemline supports parallel execution of tasks using the `fork` construct. This enables workflows to perform multiple independent operations concurrently, improving performance and throughput.
+
+## Why Parallel Execution?
+
+Use parallel execution when:
+- Multiple tasks don't depend on each other
+- You need to call multiple APIs simultaneously
+- Background checks or validations can run in parallel
+- You want to reduce overall workflow execution time
+
+## Basic Fork Example
+
+The `fork` construct executes multiple branches concurrently:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: parallel-api-calls
+  version: '1.0.0'
+do:
+  - fetchDataInParallel:
+      fork:
+        - getUserData:
+            do:
+              - fetchUser:
+                  call: http
+                  with:
+                    method: get
+                    endpoint: https://api.example.com/users/{userId}
+                    output: userData
+        - getOrderData:
+            do:
+              - fetchOrders:
+                  call: http
+                  with:
+                    method: get
+                    endpoint: https://api.example.com/orders
+                    query:
+                      userId: ${ .userId }
+                    output: orderData
+        - getPreferences:
+            do:
+              - fetchPreferences:
+                  call: http
+                  with:
+                    method: get
+                    endpoint: https://api.example.com/preferences/{userId}
+                    output: preferences
+      output:
+        as: allData
+```
+
+<Note>
+All three API calls execute **simultaneously**. The workflow waits for all branches to complete before continuing.
+</Note>
+
+## Real-World Example: Loan Application
+
+This example performs multiple background checks in parallel:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: finance
+  name: mortgage-application
+  version: '1.0.0'
+do:
+  - initiateBackgroundChecks:
+      fork:
+        - creditCheck:
+            do:
+              - runCreditCheck:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://credit.bank.example/api/check
+                    body:
+                      ssn: ${ .application.ssn }
+                      name: ${ .application.name }
+                    output: creditReport
+        - employmentVerification:
+            do:
+              - verifyEmployment:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://verification.bank.example/api/employment
+                    body:
+                      employer: ${ .application.employer }
+                      applicantName: ${ .application.name }
+                      claimed_income: ${ .application.income }
+                    output: employmentVerification
+        - propertyAppraisal:
+            do:
+              - scheduleAppraisal:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://appraisal.bank.example/api/schedule
+                    body:
+                      propertyAddress: ${ .application.propertyAddress }
+                      applicantPhone: ${ .application.phone }
+                    output: appraisalSchedule
+              - waitForAppraisal:
+                  listen:
+                    to:
+                      one:
+                        with:
+                          type: com.bank.mortgage.appraisal.completed
+                          correlationId: ${ $context.applicationId }
+                    for:
+                      days: 14
+                  output:
+                    as: appraisalResult
+      output:
+        as: backgroundChecks
+
+  - assessApplication:
+      do:
+        - compileResults:
+            set:
+              assessmentPackage:
+                application: ${ .application }
+                creditScore: ${ .backgroundChecks.creditCheck.creditReport.score }
+                creditReport: ${ .backgroundChecks.creditCheck.creditReport }
+                employmentVerified: ${ .backgroundChecks.employmentVerification.verified }
+                income: ${ .backgroundChecks.employmentVerification.verifiedIncome }
+                propertyValue: ${ .backgroundChecks.propertyAppraisal.appraisalResult.value }
+                loanToValue: ${ .application.loanAmount / .backgroundChecks.propertyAppraisal.appraisalResult.value * 100 }
+```
+
+**What happens:**
+1. Three independent checks run in parallel:
+   - Credit check (API call)
+   - Employment verification (API call)
+   - Property appraisal (API call + event wait)
+2. The workflow waits for all three to complete
+3. Results are combined in `backgroundChecks`
+4. The assessment compiles data from all branches
+
+## Accessing Fork Results
+
+Each fork branch produces output that can be accessed by name:
+
+```yaml
+do:
+  - parallelFetch:
+      fork:
+        - branch1:
+            do:
+              - fetchData1:
+                  call: http
+                  with:
+                    method: get
+                    endpoint: https://api1.example.com/data
+                    output: result1
+        - branch2:
+            do:
+              - fetchData2:
+                  call: http
+                  with:
+                    method: get
+                    endpoint: https://api2.example.com/data
+                    output: result2
+      output:
+        as: forkResults
+
+  - processResults:
+      set:
+        combined:
+          data1: ${ .forkResults.branch1.result1 }
+          data2: ${ .forkResults.branch2.result2 }
+```
+
+## Error Handling in Fork
+
+Each branch can have its own error handling:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: fork-with-errors
+  version: '1.0.0'
+do:
+  - parallelProcessing:
+      fork:
+        - reliableBranch:
+            do:
+              - safeOperation:
+                  call: http
+                  with:
+                    method: get
+                    endpoint: https://reliable-api.example.com/data
+                    output: reliableData
+        - riskyBranch:
+            do:
+              - riskyOperation:
+                  try:
+                    - unsafeCall:
+                        call: http
+                        with:
+                          method: get
+                          endpoint: https://unreliable-api.example.com/data
+                          output: riskyData
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                    retry:
+                      delay:
+                        seconds: 2
+                      backoff:
+                        exponential: {}
+                      limit:
+                        attempt:
+                          count: 3
+      output:
+        as: results
+```
+
+<Warning>
+If any fork branch fails and doesn't handle the error, the **entire fork fails** and the error propagates to the parent workflow.
+</Warning>
+
+## Fork with Multiple Tasks per Branch
+
+Each branch can contain multiple sequential tasks:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: complex-fork
+  version: '1.0.0'
+do:
+  - processOrder:
+      fork:
+        - inventoryPath:
+            do:
+              - checkInventory:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://inventory.example.com/api/check
+                    body: ${ .items }
+                    output: inventoryStatus
+              - reserveItems:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://inventory.example.com/api/reserve
+                    body: ${ .inventoryStatus.availableItems }
+                    output: reservation
+        - paymentPath:
+            do:
+              - validatePayment:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://payments.example.com/api/validate
+                    body: ${ .paymentDetails }
+                    output: paymentValidation
+              - authorizePayment:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://payments.example.com/api/authorize
+                    body: ${ .paymentValidation }
+                    output: authorization
+        - shippingPath:
+            do:
+              - calculateShipping:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://shipping.example.com/api/calculate
+                    body:
+                      items: ${ .items }
+                      address: ${ .shippingAddress }
+                    output: shippingCost
+              - reserveCarrier:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://shipping.example.com/api/reserve
+                    body: ${ .shippingCost }
+                    output: carrierReservation
+      output:
+        as: orderProcessing
+```
+
+Each branch runs its tasks sequentially, but the three branches run in parallel.
+
+## When NOT to Use Fork
+
+Avoid fork when:
+- Tasks depend on each other's results
+- Order of execution matters
+- Shared resources require sequential access
+- The overhead of parallelism exceeds the benefit
+
+**Example of incorrect use:**
+
+```yaml
+# BAD: Second task needs result from first
+fork:
+  - branch1:
+      do:
+        - getUserId:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/user
+              output: user
+  - branch2:
+      do:
+        - getOrders:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/orders
+              query:
+                userId: ${ .user.id }  # Can't access .user from other branch!
+```
+
+**Correct approach:**
+
+```yaml
+# GOOD: Sequential execution
+do:
+  - getUserId:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/user
+        output: user
+  - getOrders:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/orders
+        query:
+          userId: ${ .user.id }
+```
+
+## Performance Considerations
+
+<AccordionGroup>
+  <Accordion title="Resource limits">
+    Each branch consumes resources. Too many parallel branches may overwhelm the system or external services.
+  </Accordion>
+  
+  <Accordion title="Bottleneck awareness">
+    The slowest branch determines the total execution time. Identify and optimize slow branches.
+  </Accordion>
+  
+  <Accordion title="Rate limiting">
+    When calling the same external API from multiple branches, be aware of rate limits. Consider spreading calls over time.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Event Listeners" icon="signal" href="/examples/event-listeners">
+    Use events within fork branches
+  </Card>
+  <Card title="Error Handling" icon="shield-halved" href="/examples/error-handling">
+    Handle errors in parallel tasks
+  </Card>
+</CardGroup>

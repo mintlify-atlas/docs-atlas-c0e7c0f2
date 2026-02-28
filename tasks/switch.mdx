@@ -1,0 +1,593 @@
+---
+title: Switch Task
+description: Conditional branching based on evaluated conditions
+---
+
+The Switch task provides conditional branching, allowing workflows to select different execution paths based on data conditions.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: route-order
+  version: '1.0.0'
+do:
+  - routeOrder:
+      switch:
+        - highPriority:
+            when: "${ .order.priority == 'high' }"
+            then: processHighPriority
+        - standard:
+            when: "${ .order.priority == 'standard' }"
+            then: processStandard
+        - default:
+            then: processLowPriority
+  
+  - processHighPriority:
+      call: http
+      with:
+        endpoint: https://api.example.com/orders/priority
+        method: post
+        body: "${ .order }"
+      then: end
+  
+  - processStandard:
+      call: http
+      with:
+        endpoint: https://api.example.com/orders/standard
+        method: post
+        body: "${ .order }"
+      then: end
+  
+  - processLowPriority:
+      call: http
+      with:
+        endpoint: https://api.example.com/orders/batch
+        method: post
+        body: "${ .order }"
+```
+
+## How It Works
+
+1. Conditions are evaluated in order
+2. The first condition that evaluates to `true` is selected
+3. Execution jumps to the task specified in that case's `then`
+4. Subsequent conditions are not evaluated
+5. A case without `when` acts as the default
+
+```yaml
+switch:
+  - case1:
+      when: "${ .value > 100 }"  # Checked first
+      then: handleLarge
+  - case2:
+      when: "${ .value > 50 }"   # Only checked if value <= 100
+      then: handleMedium
+  - default:                       # Only if no conditions matched
+      then: handleSmall
+```
+
+## Complete Examples
+
+### Order Type Routing
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-routing
+  version: '1.0.0'
+do:
+  - analyzeOrder:
+      set:
+        order:
+          type: "${ .orderType }"
+          value: "${ .total }"
+          items: "${ .items }"
+  
+  - routeByType:
+      switch:
+        - digital:
+            when: "${ .order.type == 'digital' }"
+            then: processDigitalOrder
+        - physical:
+            when: "${ .order.type == 'physical' and .order.value > 100 }"
+            then: processPhysicalHighValue
+        - physicalStandard:
+            when: "${ .order.type == 'physical' }"
+            then: processPhysicalStandard
+        - subscription:
+            when: "${ .order.type == 'subscription' }"
+            then: processSubscription
+        - unknown:
+            then: handleUnknownType
+  
+  - processDigitalOrder:
+      do:
+        - generateLicense:
+            call: http
+            with:
+              method: post
+              endpoint: https://licensing.example.com/api/generate
+              body: "${ .order }"
+        - sendDownloadLink:
+            call: http
+            with:
+              method: post
+              endpoint: https://notifications.example.com/api/send
+              body:
+                template: digital_order_ready
+                data: "${ .body }"
+      then: end
+  
+  - processPhysicalHighValue:
+      do:
+        - reserveInventory:
+            call: http
+            with:
+              method: post
+              endpoint: https://inventory.example.com/api/reserve
+              body: "${ .order.items }"
+        - requireSignature:
+            set:
+              shipping:
+                requireSignature: true
+                insurance: true
+        - scheduleShipping:
+            call: http
+            with:
+              method: post
+              endpoint: https://shipping.example.com/api/schedule
+              body: "${ .shipping }"
+      then: end
+  
+  - processPhysicalStandard:
+      do:
+        - scheduleStandardShipping:
+            call: http
+            with:
+              method: post
+              endpoint: https://shipping.example.com/api/schedule
+              body:
+                items: "${ .order.items }"
+                standard: true
+      then: end
+  
+  - processSubscription:
+      do:
+        - createSubscription:
+            call: http
+            with:
+              method: post
+              endpoint: https://subscriptions.example.com/api/create
+              body: "${ .order }"
+      then: end
+  
+  - handleUnknownType:
+      do:
+        - logError:
+            call: http
+            with:
+              method: post
+              endpoint: https://logging.example.com/api/log
+              body:
+                level: error
+                message: "Unknown order type: ${ .order.type }"
+        - notifySupport:
+            call: http
+            with:
+              method: post
+              endpoint: https://support.example.com/api/alert
+              body:
+                type: unknown_order_type
+                order: "${ .order }"
+```
+
+### Customer Tier Routing
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: customer-tier-routing
+  version: '1.0.0'
+do:
+  - getCustomer:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/customers/{customerId}
+      output:
+        as: customer
+  
+  - routeByTier:
+      switch:
+        - vip:
+            when: "${ .customer.tier == 'vip' or .customer.lifetimeValue > 10000 }"
+            then: vipHandling
+        - premium:
+            when: "${ .customer.tier == 'premium' or .customer.lifetimeValue > 5000 }"
+            then: premiumHandling
+        - standard:
+            when: "${ .customer.tier == 'standard' }"
+            then: standardHandling
+        - new:
+            then: newCustomerHandling
+  
+  - vipHandling:
+      do:
+        - assignDedicatedAgent:
+            call: http
+            with:
+              method: post
+              endpoint: https://crm.example.com/api/assign-agent
+              body:
+                customerId: "${ .customer.id }"
+                tier: vip
+        - applyVIPDiscount:
+            set:
+              discount: 0.20
+              freeShipping: true
+              prioritySupport: true
+      then: processRequest
+  
+  - premiumHandling:
+      set:
+        discount: 0.10
+        freeShipping: true
+        prioritySupport: false
+      then: processRequest
+  
+  - standardHandling:
+      set:
+        discount: 0.05
+        freeShipping: false
+        prioritySupport: false
+      then: processRequest
+  
+  - newCustomerHandling:
+      do:
+        - sendWelcome:
+            call: http
+            with:
+              method: post
+              endpoint: https://notifications.example.com/api/send
+              body:
+                template: welcome_new_customer
+                customerId: "${ .customer.id }"
+        - applyFirstTimeDiscount:
+            set:
+              discount: 0.15
+              freeShipping: false
+              prioritySupport: false
+      then: processRequest
+  
+  - processRequest:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/process
+        body:
+          customer: "${ .customer }"
+          discount: "${ .discount }"
+          freeShipping: "${ .freeShipping }"
+```
+
+### Error Status Routing
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: http-status-routing
+  version: '1.0.0'
+do:
+  - callExternalAPI:
+      try:
+        - makeRequest:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/data
+              output: response  # Get full response
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: httpError
+        do:
+          - storeError:
+              set:
+                response:
+                  status: "${ $httpError.status || 500 }"
+                  error: "${ $httpError }"
+  
+  - routeByStatus:
+      switch:
+        - success:
+            when: "${ .response.status >= 200 and .response.status < 300 }"
+            then: processSuccess
+        - redirect:
+            when: "${ .response.status >= 300 and .response.status < 400 }"
+            then: handleRedirect
+        - clientError:
+            when: "${ .response.status >= 400 and .response.status < 500 }"
+            then: handleClientError
+        - serverError:
+            when: "${ .response.status >= 500 }"
+            then: handleServerError
+        - unknown:
+            then: handleUnknownStatus
+  
+  - processSuccess:
+      set:
+        result:
+          success: true
+          data: "${ .response.body }"
+      then: end
+  
+  - handleRedirect:
+      call: http
+      with:
+        method: get
+        endpoint: "${ .response.headers.Location }"
+      then: end
+  
+  - handleClientError:
+      do:
+        - logClientError:
+            call: http
+            with:
+              method: post
+              endpoint: https://logging.example.com/api/log
+              body:
+                level: warn
+                status: "${ .response.status }"
+                error: "${ .response.error }"
+        - returnError:
+            set:
+              result:
+                success: false
+                error: Client error
+                status: "${ .response.status }"
+      then: end
+  
+  - handleServerError:
+      emit:
+        event:
+          with:
+            source: workflow-engine
+            type: com.example.api.server_error
+            data:
+              status: "${ .response.status }"
+              error: "${ .response.error }"
+      then: end
+  
+  - handleUnknownStatus:
+      set:
+        result:
+          success: false
+          error: Unknown status
+          status: "${ .response.status }"
+```
+
+### Data Validation Routing
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: validation-routing
+  version: '1.0.0'
+do:
+  - validateInput:
+      set:
+        validation:
+          hasEmail: "${ .input.email != null }"
+          hasName: "${ .input.name != null }"
+          hasAddress: "${ .input.address != null }"
+          emailValid: "${ .input.email | test("^[^@]+@[^@]+\\.[^@]+$") }"
+  
+  - routeValidation:
+      switch:
+        - fullyValid:
+            when: "${ .validation.hasEmail and .validation.hasName and .validation.hasAddress and .validation.emailValid }"
+            then: processComplete
+        - missingEmail:
+            when: "${ !.validation.hasEmail }"
+            then: requestEmail
+        - invalidEmail:
+            when: "${ .validation.hasEmail and !.validation.emailValid }"
+            then: requestValidEmail
+        - missingName:
+            when: "${ !.validation.hasName }"
+            then: requestName
+        - missingAddress:
+            when: "${ !.validation.hasAddress }"
+            then: requestAddress
+        - partiallyValid:
+            then: processPartial
+  
+  - processComplete:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/users/complete
+        body: "${ .input }"
+      then: end
+  
+  - requestEmail:
+      emit:
+        event:
+          with:
+            type: com.example.validation.missing_email
+            data:
+              userId: "${ .input.id }"
+      then: end
+  
+  - requestValidEmail:
+      emit:
+        event:
+          with:
+            type: com.example.validation.invalid_email
+            data:
+              userId: "${ .input.id }"
+              email: "${ .input.email }"
+      then: end
+  
+  - requestName:
+      emit:
+        event:
+          with:
+            type: com.example.validation.missing_name
+            data:
+              userId: "${ .input.id }"
+      then: end
+  
+  - requestAddress:
+      emit:
+        event:
+          with:
+            type: com.example.validation.missing_address
+            data:
+              userId: "${ .input.id }"
+      then: end
+  
+  - processPartial:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/users/partial
+        body:
+          input: "${ .input }"
+          validation: "${ .validation }"
+```
+
+## Configuration
+
+### switch (required)
+
+List of cases to evaluate:
+
+```yaml
+switch:
+  - caseName1:
+      when: "${ condition }"  # Optional
+      then: targetTask        # Required
+  - caseName2:
+      when: "${ condition }"
+      then: targetTask
+  - default:                  # No 'when' = default case
+      then: defaultTask
+```
+
+### when (optional)
+
+Runtime expression evaluated to boolean:
+
+```yaml
+when: "${ .status == 'active' }"
+when: "${ .value > 100 and .type == 'premium' }"
+when: "${ length(.items) > 0 }"
+```
+
+### then (required)
+
+Target task to execute:
+
+- `taskName` - Jump to named task
+- `continue` - Continue to next task
+- `exit` - Exit workflow
+- `end` - End workflow
+
+## Data Flow
+
+The Switch task passes data through unchanged:
+
+```yaml
+- routeData:
+    # Input: { "value": 150 }
+    switch:
+      - high:
+          when: "${ .value > 100 }"
+          then: processHigh
+      - low:
+          then: processLow
+
+- processHigh:
+    # Input is still: { "value": 150 }
+    set:
+      result: "${ .value * 2 }"
+```
+
+## Best Practices
+
+1. **Order conditions carefully** - Place most specific conditions first
+2. **Include a default case** - Always handle the "else" scenario
+3. **Keep conditions simple** - Complex logic should be in Set tasks
+4. **Use meaningful case names** - Make the branching logic clear
+5. **Avoid overlapping conditions** - Each case should be distinct
+6. **Document complex logic** - Add comments for non-obvious conditions
+7. **Test all paths** - Ensure each branch is reachable and tested
+
+## Common Patterns
+
+### Priority Routing
+
+```yaml
+switch:
+  - critical:
+      when: "${ .priority == 1 }"
+      then: handleCritical
+  - high:
+      when: "${ .priority == 2 }"
+      then: handleHigh
+  - medium:
+      when: "${ .priority == 3 }"
+      then: handleMedium
+  - default:
+      then: handleLow
+```
+
+### Range-Based Routing
+
+```yaml
+switch:
+  - veryLarge:
+      when: "${ .size > 1000 }"
+      then: processVeryLarge
+  - large:
+      when: "${ .size > 100 }"
+      then: processLarge
+  - medium:
+      when: "${ .size > 10 }"
+      then: processMedium
+  - small:
+      then: processSmall
+```
+
+### Type Checking
+
+```yaml
+switch:
+  - isArray:
+      when: "${ . | type == 'array' }"
+      then: processArray
+  - isObject:
+      when: "${ . | type == 'object' }"
+      then: processObject
+  - isString:
+      when: "${ . | type == 'string' }"
+      then: processString
+  - other:
+      then: processOther
+```
+
+## Related Topics
+
+- [Do Task](/tasks/do) - Sequential execution
+- [For Task](/tasks/for) - Iteration with conditions
+- [Set Task](/tasks/set) - Prepare data for conditions
+- [If Property](../reference/task-properties) - Conditional task execution

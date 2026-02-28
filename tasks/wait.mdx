@@ -1,0 +1,450 @@
+---
+title: Wait Task
+description: Pause workflow execution for a specified duration
+---
+
+The Wait task introduces a delay into workflow execution, pausing for a specified duration before continuing.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: delayed-processing
+  version: '1.0.0'
+do:
+  - sendEmail:
+      call: http
+      with:
+        method: post
+        endpoint: https://email.example.com/api/send
+        body:
+          to: "${ .user.email }"
+          template: welcome
+  
+  - waitBeforeFollowUp:
+      wait:
+        duration: PT24H  # Wait 24 hours
+  
+  - sendFollowUp:
+      call: http
+      with:
+        method: post
+        endpoint: https://email.example.com/api/send
+        body:
+          to: "${ .user.email }"
+          template: follow_up
+```
+
+## Duration Format
+
+Wait durations use ISO 8601 duration format:
+
+```yaml
+# Seconds
+wait:
+  duration: PT10S  # 10 seconds
+
+# Minutes
+wait:
+  duration: PT5M   # 5 minutes
+
+# Hours
+wait:
+  duration: PT2H   # 2 hours
+
+# Days
+wait:
+  duration: P1D    # 1 day
+
+# Combined
+wait:
+  duration: PT1H30M  # 1 hour 30 minutes
+wait:
+  duration: P1DT12H  # 1 day 12 hours
+```
+
+## Complete Examples
+
+### Email Drip Campaign
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: email-drip
+  version: '1.0.0'
+do:
+  - sendWelcomeEmail:
+      call: http
+      with:
+        method: post
+        endpoint: https://email.example.com/api/send
+        body:
+          to: "${ .user.email }"
+          template: welcome_day_0
+          data:
+            name: "${ .user.name }"
+  
+  - waitDay1:
+      wait:
+        duration: P1D
+  
+  - sendDay1Email:
+      call: http
+      with:
+        method: post
+        endpoint: https://email.example.com/api/send
+        body:
+          to: "${ .user.email }"
+          template: tips_day_1
+  
+  - waitDay3:
+      wait:
+        duration: P2D
+  
+  - sendDay3Email:
+      call: http
+      with:
+        method: post
+        endpoint: https://email.example.com/api/send
+        body:
+          to: "${ .user.email }"
+          template: features_day_3
+  
+  - waitDay7:
+      wait:
+        duration: P4D
+  
+  - sendDay7Email:
+      call: http
+      with:
+        method: post
+        endpoint: https://email.example.com/api/send
+        body:
+          to: "${ .user.email }"
+          template: feedback_day_7
+```
+
+### Retry with Delay
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: manual-retry
+  version: '1.0.0'
+do:
+  - initializeRetry:
+      set:
+        maxAttempts: 3
+        currentAttempt: 0
+        success: false
+  
+  - attemptOperation:
+      for:
+        in: "${ range(0, .maxAttempts) }"
+        each: attemptNum
+        while: "${ !.success }"
+      do:
+        - incrementAttempt:
+            set:
+              currentAttempt: "${ .currentAttempt + 1 }"
+        
+        - tryOperation:
+            try:
+              - callService:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://api.example.com/process
+                    body: "${ .data }"
+              - markSuccess:
+                  set:
+                    success: true
+            catch:
+              errors:
+                with:
+                  type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+              do:
+                - checkRetry:
+                    if: "${ .currentAttempt < .maxAttempts }"
+                    wait:
+                      duration: PT5S  # Wait 5 seconds before retry
+```
+
+### Scheduled Maintenance Window
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: maintenance-window
+  version: '1.0.0'
+do:
+  - calculateDelay:
+      set:
+        now: "${ now() }"
+        maintenanceStart: "${ .input.scheduledTime || '2024-01-15T02:00:00Z' }"
+        delaySeconds: "${ (.maintenanceStart | fromdateiso8601) - (.now | fromdateiso8601) }"
+  
+  - notifyUsers:
+      call: http
+      with:
+        method: post
+        endpoint: https://notifications.example.com/api/broadcast
+        body:
+          message: "Maintenance scheduled for ${ .maintenanceStart }"
+          channel: all
+  
+  - waitUntilMaintenance:
+      if: "${ .delaySeconds > 0 }"
+      wait:
+        duration: "PT${ .delaySeconds }S"
+  
+  - performMaintenance:
+      call: http
+      with:
+        method: post
+        endpoint: https://ops.example.com/api/maintenance/execute
+        body:
+          tasks: "${ .input.maintenanceTasks }"
+  
+  - notifyCompletion:
+      call: http
+      with:
+        method: post
+        endpoint: https://notifications.example.com/api/broadcast
+        body:
+          message: Maintenance completed
+          channel: all
+```
+
+### Polling Pattern
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: polling-pattern
+  version: '1.0.0'
+do:
+  - startJob:
+      call: http
+      with:
+        method: post
+        endpoint: https://batch.example.com/api/jobs
+        body: "${ .jobConfig }"
+      output:
+        as: "${ .body.jobId }"
+      export:
+        as: "${ { jobId: . } }"
+  
+  - initPolling:
+      set:
+        maxPolls: 20
+        pollCount: 0
+        completed: false
+  
+  - pollForCompletion:
+      for:
+        in: "${ range(0, .maxPolls) }"
+        while: "${ !.completed }"
+      do:
+        - waitBetweenPolls:
+            wait:
+              duration: PT30S  # Poll every 30 seconds
+        
+        - checkStatus:
+            call: http
+            with:
+              method: get
+              endpoint: https://batch.example.com/api/jobs/{jobId}/status
+        
+        - evaluateStatus:
+            set:
+              completed: "${ .body.status == 'completed' or .body.status == 'failed' }"
+              pollCount: "${ .pollCount + 1 }"
+  
+  - returnResult:
+      set:
+        result:
+          jobId: "${ $context.jobId }"
+          status: "${ .body.status }"
+          polls: "${ .pollCount }"
+```
+
+### Dynamic Wait Duration
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: dynamic-wait
+  version: '1.0.0'
+do:
+  - determineWaitTime:
+      set:
+        priority: "${ .input.priority || 'normal' }"
+        waitDuration: "${
+          if (.priority == 'high') then 'PT5S'
+          elif (.priority == 'medium') then 'PT30S'
+          elif (.priority == 'low') then 'PT5M'
+          else 'PT1M'
+          end
+        }"
+  
+  - logWait:
+      call: http
+      with:
+        method: post
+        endpoint: https://logging.example.com/api/log
+        body:
+          message: "Waiting ${ .waitDuration } for ${ .priority } priority"
+  
+  - waitBasedOnPriority:
+      wait:
+        duration: "${ .waitDuration }"
+  
+  - processRequest:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/process
+        body: "${ .input }"
+```
+
+### Rate Limiting
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: rate-limiting
+  version: '1.0.0'
+do:
+  - processBatches:
+      for:
+        in: "${ .batches }"
+        each: batch
+        at: batchIndex
+      do:
+        - processBatch:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/batch
+              body: "${ $batch }"
+        
+        - rateLimitDelay:
+            if: "${ $batchIndex < (length(.batches) - 1) }"  # Don't wait after last batch
+            wait:
+              duration: PT2S  # 2 second delay between batches
+```
+
+## Configuration
+
+### duration (required)
+
+ISO 8601 duration:
+
+```yaml
+wait:
+  duration: PT30S  # 30 seconds
+```
+
+Common durations:
+
+- `PT10S` - 10 seconds
+- `PT1M` - 1 minute
+- `PT15M` - 15 minutes
+- `PT1H` - 1 hour
+- `PT12H` - 12 hours
+- `P1D` - 1 day
+- `P7D` - 7 days
+- `PT1H30M` - 1 hour 30 minutes
+
+## Data Flow
+
+Wait tasks pass data through unchanged:
+
+```yaml
+- prepareData:
+    set:
+      message: "Hello"
+
+- waitABit:
+    wait:
+      duration: PT5S
+
+- useData:
+    # Input is still: { "message": "Hello" }
+    set:
+      output: "${ .message + ' World' }"
+```
+
+## Best Practices
+
+1. **Use for business delays** - Not for polling (use Listen instead)
+2. **Consider workflow lifetime** - Long waits may be better as separate workflows
+3. **Document wait purpose** - Make the reason for the delay clear
+4. **Use dynamic durations** - Calculate wait time based on context
+5. **Combine with timeouts** - Set overall workflow timeouts
+6. **Test with short durations** - Use shorter waits in test environments
+7. **Monitor long-running workflows** - Track workflows with extended waits
+
+## Common Patterns
+
+### Debouncing
+
+```yaml
+# Wait to ensure no more events arrive
+- debounceWait:
+    wait:
+      duration: PT30S
+- processStableData:
+    call: http
+    # ...
+```
+
+### Graceful Shutdown
+
+```yaml
+# Allow time for cleanup
+- initiateShutdown:
+    call: http
+    # ...
+- waitForDrain:
+    wait:
+      duration: PT30S
+- finalizeShutdown:
+    call: http
+    # ...
+```
+
+### Scheduled Execution
+
+```yaml
+# Wait until specific time
+- calculateDelay:
+    set:
+      delayUntil: "${ (.targetTime | fromdateiso8601) - (now() | fromdateiso8601) }"
+- waitUntilTime:
+    wait:
+      duration: "PT${ .delayUntil }S"
+```
+
+## Alternatives
+
+Consider these alternatives:
+
+- **Listen Task** - For event-driven delays
+- **Cron Workflows** - For scheduled execution
+- **External Schedulers** - For complex timing requirements
+
+## Related Topics
+
+- [Listen Task](/tasks/listen) - Wait for events instead of time
+- [Try/Catch](/tasks/try-catch) - Retry delays with backoff
+- [For Task](/tasks/for) - Delays between iterations

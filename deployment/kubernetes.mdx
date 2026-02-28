@@ -1,0 +1,584 @@
+---
+title: Kubernetes Deployment
+description: Deploy Lemline on Kubernetes for production workloads
+---
+
+Deploy Lemline runners on Kubernetes for enterprise-grade orchestration with automatic scaling, rolling updates, and high availability.
+
+## Prerequisites
+
+- Kubernetes cluster (1.24+)
+- kubectl configured to access your cluster
+- PostgreSQL or MySQL database (managed or in-cluster)
+- Kafka, RabbitMQ, or PGMQ messaging infrastructure
+- Container registry access for Lemline images
+
+## Architecture Options
+
+### Deployment vs StatefulSet
+
+**Use Deployment when:**
+- Runners are completely stateless (recommended)
+- Using external database and broker
+- Need fast rolling updates
+- Horizontal scaling is required
+
+**Use StatefulSet when:**
+- Need stable network identities
+- Mounting persistent volumes for local caching
+- Running PGMQ with dedicated database instances
+
+<Note>
+Lemline runners are designed to be stateless. Use Deployment for most scenarios.
+</Note>
+
+## Basic Deployment
+
+### ConfigMap for Configuration
+
+Create a ConfigMap with your Lemline configuration:
+
+```yaml configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lemline-config
+  namespace: lemline
+data:
+  lemline.yaml: |
+    lemline:
+      database:
+        postgresql:
+          host: postgres.database.svc.cluster.local
+          port: 5432
+          database: lemline
+          username: lemline
+      messaging:
+        kafka:
+          brokers: kafka.messaging.svc.cluster.local:9092
+      database:
+        migrate-at-start: true
+        baseline-on-migrate: true
+```
+
+### Secret for Credentials
+
+Store sensitive credentials in Kubernetes Secrets:
+
+```yaml secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lemline-secrets
+  namespace: lemline
+type: Opaque
+stringData:
+  database-password: "your-secure-password"
+  kafka-username: "lemline"
+  kafka-password: "kafka-password"
+```
+
+Apply the secret:
+```bash
+kubectl apply -f secret.yaml
+```
+
+### Deployment Manifest
+
+```yaml deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lemline-runner
+  namespace: lemline
+  labels:
+    app: lemline-runner
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: lemline-runner
+  template:
+    metadata:
+      labels:
+        app: lemline-runner
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9445"
+        prometheus.io/path: "/q/metrics"
+    spec:
+      containers:
+      - name: lemline-runner
+        image: lemline-runner:latest
+        imagePullPolicy: IfNotPresent
+        args:
+          - "--config=/config/lemline.yaml"
+          - "listen"
+          - "--metrics-port"
+          - "9445"
+        env:
+        - name: LEMLINE_DATABASE_POSTGRESQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: lemline-secrets
+              key: database-password
+        - name: QUARKUS_LOG_LEVEL
+          value: "INFO"
+        - name: JAVA_OPTS
+          value: "-Xmx2g -Xms1g"
+        ports:
+        - name: metrics
+          containerPort: 9445
+          protocol: TCP
+        volumeMounts:
+        - name: config
+          mountPath: /config
+          readOnly: true
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /q/health/live
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /q/health/ready
+            port: metrics
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /q/health/started
+            port: metrics
+          initialDelaySeconds: 0
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+      volumes:
+      - name: config
+        configMap:
+          name: lemline-config
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+```
+
+### Service for Metrics
+
+```yaml service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: lemline-runner-metrics
+  namespace: lemline
+  labels:
+    app: lemline-runner
+spec:
+  type: ClusterIP
+  selector:
+    app: lemline-runner
+  ports:
+  - name: metrics
+    port: 9445
+    targetPort: metrics
+    protocol: TCP
+```
+
+## Deploying the Stack
+
+<Steps>
+  <Step title="Create namespace">
+    ```bash
+    kubectl create namespace lemline
+    ```
+  </Step>
+
+  <Step title="Apply secrets and configuration">
+    ```bash
+    kubectl apply -f secret.yaml
+    kubectl apply -f configmap.yaml
+    ```
+  </Step>
+
+  <Step title="Deploy Lemline runners">
+    ```bash
+    kubectl apply -f deployment.yaml
+    kubectl apply -f service.yaml
+    ```
+  </Step>
+
+  <Step title="Verify deployment">
+    ```bash
+    kubectl get pods -n lemline
+    kubectl logs -n lemline -l app=lemline-runner --tail=50
+    ```
+  </Step>
+</Steps>
+
+## Horizontal Pod Autoscaling
+
+Automatically scale runners based on CPU, memory, or custom metrics:
+
+```yaml hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: lemline-runner-hpa
+  namespace: lemline
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: lemline-runner
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+      - type: Pods
+        value: 5
+        periodSeconds: 30
+      selectPolicy: Max
+```
+
+Apply the HPA:
+```bash
+kubectl apply -f hpa.yaml
+```
+
+### Custom Metrics Scaling
+
+Scale based on Kafka consumer lag or queue depth using custom metrics:
+
+```yaml
+metrics:
+- type: External
+  external:
+    metric:
+      name: kafka_consumer_lag
+      selector:
+        matchLabels:
+          topic: lemline-commands
+    target:
+      type: AverageValue
+      averageValue: "1000"
+```
+
+<Note>
+Requires Prometheus Adapter or similar custom metrics provider.
+</Note>
+
+## Rolling Updates
+
+Configure deployment strategy for zero-downtime updates:
+
+```yaml
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+```
+
+Perform a rolling update:
+```bash
+# Update image
+kubectl set image deployment/lemline-runner \
+  lemline-runner=lemline-runner:v1.2.0 \
+  -n lemline
+
+# Monitor rollout
+kubectl rollout status deployment/lemline-runner -n lemline
+
+# Rollback if needed
+kubectl rollout undo deployment/lemline-runner -n lemline
+```
+
+## Resource Management
+
+### Pod Disruption Budget
+
+Prevent too many pods from being disrupted simultaneously:
+
+```yaml pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lemline-runner-pdb
+  namespace: lemline
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: lemline-runner
+```
+
+### Resource Quotas
+
+Limit resource consumption per namespace:
+
+```yaml resourcequota.yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: lemline-quota
+  namespace: lemline
+spec:
+  hard:
+    requests.cpu: "10"
+    requests.memory: "20Gi"
+    limits.cpu: "20"
+    limits.memory: "40Gi"
+    pods: "50"
+```
+
+## Monitoring and Observability
+
+### Prometheus ServiceMonitor
+
+If using Prometheus Operator, create a ServiceMonitor:
+
+```yaml servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: lemline-runner
+  namespace: lemline
+  labels:
+    app: lemline-runner
+spec:
+  selector:
+    matchLabels:
+      app: lemline-runner
+  endpoints:
+  - port: metrics
+    path: /q/metrics
+    interval: 30s
+    scrapeTimeout: 10s
+```
+
+### Grafana Dashboard
+
+Import Lemline metrics into Grafana:
+
+- Workflow execution rate
+- Task success/failure rates
+- Retry statistics
+- Database operation latency
+- JVM memory and CPU usage
+
+## Advanced Configurations
+
+### Multiple Environments
+
+Use Kustomize for environment-specific configurations:
+
+```yaml kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: lemline-prod
+
+resources:
+- deployment.yaml
+- service.yaml
+- configmap.yaml
+- secret.yaml
+- hpa.yaml
+- pdb.yaml
+
+patchesStrategicMerge:
+- production-patches.yaml
+
+replicas:
+- name: lemline-runner
+  count: 10
+```
+
+Apply with:
+```bash
+kubectl apply -k overlays/production/
+```
+
+### Network Policies
+
+Restrict network access to Lemline runners:
+
+```yaml networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lemline-runner-netpol
+  namespace: lemline
+spec:
+  podSelector:
+    matchLabels:
+      app: lemline-runner
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9445
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: messaging
+    ports:
+    - protocol: TCP
+      port: 9092
+```
+
+### Init Containers for Migrations
+
+Run database migrations before starting runners:
+
+```yaml
+initContainers:
+- name: migrate
+  image: lemline-runner:latest
+  args:
+    - "--config=/config/lemline.yaml"
+    - "migrate"
+  env:
+  - name: LEMLINE_DATABASE_POSTGRESQL_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: lemline-secrets
+        key: database-password
+  volumeMounts:
+  - name: config
+    mountPath: /config
+    readOnly: true
+```
+
+## Troubleshooting
+
+### Pods not starting
+
+```bash
+# Check pod status
+kubectl describe pod -n lemline -l app=lemline-runner
+
+# Check events
+kubectl get events -n lemline --sort-by='.lastTimestamp'
+
+# Check logs
+kubectl logs -n lemline -l app=lemline-runner --previous
+```
+
+### Database connection issues
+
+```bash
+# Test connectivity from pod
+kubectl exec -n lemline deployment/lemline-runner -- \
+  nc -zv postgres.database.svc.cluster.local 5432
+
+# Check DNS resolution
+kubectl exec -n lemline deployment/lemline-runner -- \
+  nslookup postgres.database.svc.cluster.local
+```
+
+### High memory usage
+
+```bash
+# Check memory metrics
+kubectl top pods -n lemline
+
+# Adjust JVM heap
+env:
+- name: JAVA_OPTS
+  value: "-Xmx1g -Xms512m -XX:MaxMetaspaceSize=256m"
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use resource limits">
+    Always set both requests and limits to ensure predictable scheduling and prevent resource starvation.
+  </Accordion>
+
+  <Accordion title="Enable readiness probes">
+    Prevent traffic routing to pods that haven't fully initialized database connections and broker subscriptions.
+  </Accordion>
+
+  <Accordion title="Run multiple replicas">
+    Deploy at least 3 replicas for high availability. Lemline runners are stateless and can handle pod failures gracefully.
+  </Accordion>
+
+  <Accordion title="Use separate namespaces">
+    Isolate Lemline runners by environment (dev, staging, prod) using Kubernetes namespaces.
+  </Accordion>
+
+  <Accordion title="Monitor consumer lag">
+    Track message broker consumer lag to detect processing bottlenecks and adjust scaling policies.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Horizontal Scaling" icon="arrows-split-up-and-left" href="/deployment/scaling">
+    Learn scaling strategies
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure runners for production
+  </Card>
+  <Card title="Observability" icon="chart-line" href="/operations/monitoring">
+    Set up monitoring and alerts
+  </Card>
+  <Card title="Native Image" icon="bolt" href="/deployment/native-image">
+    Reduce resource usage with native images
+  </Card>
+</CardGroup>

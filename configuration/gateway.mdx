@@ -1,0 +1,416 @@
+---
+title: Gateway Configuration
+description: Configure the gRPC gateway for workflow ingress and lifecycle event streaming.
+keywords: ['gateway', 'grpc', 'api', 'tls', 'authentication', 'jwt', 'cors']
+---
+
+The Lemline gateway provides a gRPC API for starting workflows and streaming workflow lifecycle events.
+
+## Starting the Gateway
+
+The gateway is part of `lemline-runner` and started with the CLI command:
+
+```bash
+java -jar lemline-runner.jar --config=/path/to/config.yaml gateway start
+```
+
+Optional port overrides:
+
+```bash
+# Override gRPC port
+java -jar lemline-runner.jar gateway start --grpc-port 9443
+
+# Override metrics port
+java -jar lemline-runner.jar gateway start --metrics-port 8081
+```
+
+<Info>
+  The gateway requires runner database, messaging, and analytics configuration.
+</Info>
+
+## Basic Configuration
+
+Minimal gateway configuration for development:
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+
+  messaging:
+    type: kafka
+    kafka:
+      brokers: localhost:9092
+
+  analytics:
+    type: postgresql
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline_analytics
+      username: postgres
+      password: postgres
+
+  gateway:
+    enabled: true
+    grpc:
+      host: 0.0.0.0
+      port: 9000
+    tls:
+      enabled: false
+    authentication:
+      enabled: false
+```
+
+<Warning>
+  This configuration runs in plaintext without authentication. Use TLS and JWT in production.
+</Warning>
+
+## gRPC Configuration
+
+Configure the gRPC server settings:
+
+<ParamField path="lemline.gateway.enabled" type="boolean" default="false">
+  Enable the gateway service
+</ParamField>
+
+<ParamField path="lemline.gateway.grpc.host" type="string" default="0.0.0.0">
+  gRPC server bind address. Use `0.0.0.0` to listen on all interfaces.
+</ParamField>
+
+<ParamField path="lemline.gateway.grpc.port" type="number" default="9000">
+  gRPC server port
+</ParamField>
+
+### Example
+
+```yaml
+lemline:
+  gateway:
+    enabled: true
+    grpc:
+      host: 0.0.0.0
+      port: 9443
+```
+
+## TLS Configuration
+
+Enable TLS for secure gRPC connections:
+
+```yaml
+lemline:
+  gateway:
+    tls:
+      enabled: true
+      certificate: /path/to/server.crt
+      private-key: /path/to/server.key
+      client-auth: none
+```
+
+### TLS Parameters
+
+<ParamField path="lemline.gateway.tls.enabled" type="boolean" required default="false">
+  Enable TLS encryption
+</ParamField>
+
+<ParamField path="lemline.gateway.tls.certificate" type="string" required>
+  Path to TLS certificate file (PEM format). Required when TLS is enabled.
+</ParamField>
+
+<ParamField path="lemline.gateway.tls.private-key" type="string" required>
+  Path to TLS private key file (PEM format). Required when TLS is enabled.
+</ParamField>
+
+<ParamField path="lemline.gateway.tls.client-auth" type="string" default="none">
+  Client authentication mode: `none`, `request`, or `required`
+</ParamField>
+
+<ParamField path="lemline.gateway.tls.trust-store" type="string">
+  Path to trust store for client certificates. Required when `client-auth` is `request` or `required`.
+</ParamField>
+
+<Warning>
+  When TLS is enabled, both `certificate` and `private-key` are required.
+</Warning>
+
+## Authentication Configuration
+
+Enable JWT-based authentication:
+
+```yaml
+lemline:
+  gateway:
+    tls:
+      enabled: true
+      certificate: /path/to/server.crt
+      private-key: /path/to/server.key
+    authentication:
+      enabled: true
+      jwt:
+        issuer: https://auth.example.com/
+        jwks-url: https://auth.example.com/.well-known/jwks.json
+      claims:
+        scope-field: scope
+        namespaces-field: lemline_namespaces
+```
+
+<Info>
+  Authentication requires TLS to be enabled.
+</Info>
+
+### Authentication Parameters
+
+<ParamField path="lemline.gateway.authentication.enabled" type="boolean" default="false">
+  Enable JWT authentication. Requires TLS.
+</ParamField>
+
+<ParamField path="lemline.gateway.authentication.jwt.issuer" type="string" required>
+  Expected JWT issuer URL. Must match the `iss` claim in tokens.
+</ParamField>
+
+<ParamField path="lemline.gateway.authentication.jwt.jwks-url" type="string" required>
+  JWKS URL for JWT signature verification
+</ParamField>
+
+<ParamField path="lemline.gateway.authentication.claims.scope-field" type="string" default="scope">
+  JWT claim field containing scopes
+</ParamField>
+
+<ParamField path="lemline.gateway.authentication.claims.namespaces-field" type="string" default="lemline_namespaces">
+  JWT claim field containing allowed namespaces
+</ParamField>
+
+### Required Scopes
+
+<Tabs>
+  <Tab title="StartWorkflow">
+    Requires scope: `lemline.start`
+  </Tab>
+  <Tab title="WatchWorkflow">
+    Requires scope: `lemline.watch`
+  </Tab>
+</Tabs>
+
+### Namespace Authorization
+
+The namespaces claim controls which namespaces a user can access:
+
+- `["*"]`: Access to all namespaces
+- `["production", "staging"]`: Access to specific namespaces only
+- Empty or missing: No namespace access
+
+### Claim Formats
+
+Scopes and namespaces accept multiple formats:
+
+<Tabs>
+  <Tab title="Space-separated">
+    ```json
+    {
+      "scope": "lemline.start lemline.watch",
+      "lemline_namespaces": "production staging"
+    }
+    ```
+  </Tab>
+  <Tab title="Comma-separated">
+    ```json
+    {
+      "scope": "lemline.start,lemline.watch",
+      "lemline_namespaces": "production,staging"
+    }
+    ```
+  </Tab>
+  <Tab title="Array">
+    ```json
+    {
+      "scope": ["lemline.start", "lemline.watch"],
+      "lemline_namespaces": ["production", "staging"]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## CORS Configuration
+
+Configure CORS headers for web clients (gRPC-Web):
+
+```yaml
+lemline:
+  gateway:
+    cors:
+      enabled: true
+      origins: http://localhost:5173
+      methods: GET,POST,OPTIONS
+      headers: Accept,Authorization,Content-Type,Grpc-Timeout,X-Grpc-Web,X-User-Agent
+```
+
+### CORS Parameters
+
+<ParamField path="lemline.gateway.cors.enabled" type="boolean" default="false">
+  Enable CORS headers
+</ParamField>
+
+<ParamField path="lemline.gateway.cors.origins" type="string" required>
+  Comma-separated list of allowed origins. Use `*` for all origins (not recommended).
+</ParamField>
+
+<ParamField path="lemline.gateway.cors.methods" type="string" default="GET,POST,OPTIONS">
+  Comma-separated list of allowed HTTP methods
+</ParamField>
+
+<ParamField path="lemline.gateway.cors.headers" type="string" required>
+  Comma-separated list of allowed headers
+</ParamField>
+
+<Tip>
+  Include gRPC-Web headers: `Grpc-Timeout`, `X-Grpc-Web`, `X-User-Agent`
+</Tip>
+
+## Watch Configuration
+
+Configure workflow event streaming behavior:
+
+<ParamField path="lemline.gateway.watch.poll-interval-ms" type="number" default="250">
+  Polling interval for new events in milliseconds
+</ParamField>
+
+<ParamField path="lemline.gateway.watch.batch-size" type="number" default="256">
+  Maximum number of events to fetch per poll
+</ParamField>
+
+```yaml
+lemline:
+  gateway:
+    watch:
+      poll-interval-ms: 250
+      batch-size: 256
+```
+
+## Complete Production Example
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    migrate-at-start: true
+    baseline-on-migrate: false
+    postgresql:
+      host: ${LEMLINE_DB_HOST}
+      port: 5432
+      database: lemline
+      username: ${LEMLINE_DB_USER}
+      password: ${LEMLINE_DB_PASSWORD}
+
+  messaging:
+    type: kafka
+    kafka:
+      brokers: ${KAFKA_BROKERS}
+      security-protocol: SASL_SSL
+      sasl-mechanism: SCRAM-SHA-256
+      sasl-username: ${KAFKA_USER}
+      sasl-password: ${KAFKA_PASSWORD}
+
+  analytics:
+    type: postgresql
+    migrate-at-start: true
+    baseline-on-migrate: false
+    postgresql:
+      host: ${LEMLINE_ANALYTICS_HOST}
+      port: 5432
+      database: lemline_analytics
+      username: ${LEMLINE_ANALYTICS_USER}
+      password: ${LEMLINE_ANALYTICS_PASSWORD}
+
+  gateway:
+    enabled: true
+    grpc:
+      host: 0.0.0.0
+      port: 9443
+    tls:
+      enabled: true
+      certificate: /etc/lemline/tls/server.crt
+      private-key: /etc/lemline/tls/server.key
+      client-auth: none
+    authentication:
+      enabled: true
+      jwt:
+        issuer: https://auth.example.com/
+        jwks-url: https://auth.example.com/.well-known/jwks.json
+      claims:
+        scope-field: scope
+        namespaces-field: lemline_namespaces
+    cors:
+      enabled: true
+      origins: https://app.example.com
+      methods: GET,POST,OPTIONS
+      headers: Accept,Authorization,Content-Type,Grpc-Timeout,X-Grpc-Web,X-User-Agent
+    watch:
+      poll-interval-ms: 250
+      batch-size: 256
+```
+
+## Native Binary
+
+For native binary deployment:
+
+```bash
+# Build native binary
+./gradlew :lemline-runner:assemble -Dquarkus.native.enabled=true
+
+# Run gateway
+./lemline-runner --config=/path/to/config.yaml gateway start
+```
+
+<Info>
+  Add `-Dquarkus.native.container-build=true` for Linux binaries on macOS.
+</Info>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Port already in use">
+    - Check for other processes using the port: `lsof -i :9000`
+    - Change the gRPC port using `--grpc-port` flag
+    - Verify no other Lemline instances are running
+  </Accordion>
+  
+  <Accordion title="TLS certificate errors">
+    - Verify certificate and private key paths exist
+    - Ensure certificate is in PEM format
+    - Check certificate matches the server hostname
+    - Verify certificate has not expired
+  </Accordion>
+  
+  <Accordion title="JWT authentication failures">
+    - Verify JWKS URL is accessible
+    - Check token issuer matches configuration
+    - Ensure required scopes are in JWT claims
+    - Verify namespace claim is present and valid
+  </Accordion>
+  
+  <Accordion title="CORS errors">
+    - Verify origin URL matches exactly (including protocol and port)
+    - Check all required gRPC-Web headers are allowed
+    - Ensure CORS is enabled in configuration
+    - Review browser console for specific CORS errors
+  </Accordion>
+  
+  <Accordion title="Analytics database errors">
+    - Verify analytics database configuration
+    - Check analytics migrations are applied
+    - Ensure analytics database is accessible
+    - Review gateway logs for specific errors
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<Card title="Analytics Configuration" icon="bar-chart" href="/configuration/analytics">
+  Configure lifecycle event analytics ingestion
+</Card>

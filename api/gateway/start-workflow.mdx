@@ -1,0 +1,276 @@
+---
+title: StartWorkflow RPC
+description: Start a workflow instance with idempotency guarantees
+---
+
+The `StartWorkflow` RPC starts a new workflow instance or returns the existing instance if the workflow ID already exists.
+
+## Idempotency
+
+The client provides a `workflow_id` to ensure idempotent workflow starts:
+
+- If the workflow ID is **new**, Lemline creates a new instance and returns `ACCEPTED_NEW`
+- If the workflow ID **already exists**, Lemline returns `ACCEPTED_EXISTING` without creating a duplicate
+
+This prevents duplicate workflows when clients retry requests.
+
+## Request
+
+```protobuf
+message StartWorkflowRequest {
+  string workflow_id = 1;
+  string namespace = 2;
+  string name = 3;
+  string version = 4;
+  optional string input_json = 5;
+  optional string zone_id = 6;
+}
+```
+
+### Parameters
+
+<ParamField path="workflow_id" type="string" required>
+  Client-provided unique identifier for the workflow instance. Use UUIDv7 or another time-ordered ID for best performance.
+  
+  Example: `01933d5c-7890-7e23-9abc-123456789012`
+</ParamField>
+
+<ParamField path="namespace" type="string" required>
+  Workflow namespace. Namespaces organize workflows and control access with JWT authorization.
+  
+  Example: `production`, `staging`, `default`
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Workflow definition name.
+  
+  Example: `order-fulfillment`, `user-onboarding`
+</ParamField>
+
+<ParamField path="version" type="string" required>
+  Workflow definition version. If empty, uses the latest version.
+  
+  Example: `1.0.0`, `2.1.3`
+</ParamField>
+
+<ParamField path="input_json" type="string" optional>
+  Workflow input data as a JSON string. This becomes the initial workflow context.
+  
+  Example: `{"orderId": "12345", "customerId": "cust-789"}`
+</ParamField>
+
+<ParamField path="zone_id" type="string" optional>
+  Timezone for scheduled workflows and time-based operations. Uses IANA timezone database.
+  
+  Default: `UTC`
+  
+  Example: `America/New_York`, `Europe/Paris`
+</ParamField>
+
+## Response
+
+```protobuf
+message StartWorkflowResponse {
+  enum Result {
+    START_WORKFLOW_RESULT_UNSPECIFIED = 0;
+    START_WORKFLOW_RESULT_ACCEPTED_NEW = 1;
+    START_WORKFLOW_RESULT_ACCEPTED_EXISTING = 2;
+  }
+
+  string workflow_id = 1;
+  Result result = 2;
+}
+```
+
+### Fields
+
+<ResponseField name="workflow_id" type="string">
+  The workflow instance ID (echoed from request)
+</ResponseField>
+
+<ResponseField name="result" type="enum">
+  The outcome of the start request:
+  
+  - `ACCEPTED_NEW` - A new workflow instance was created
+  - `ACCEPTED_EXISTING` - Workflow ID already exists (idempotent retry)
+  - `UNSPECIFIED` - Should not occur in normal operation
+</ResponseField>
+
+## Examples
+
+### Using grpcurl
+
+<CodeGroup>
+```bash Start with input
+grpcurl -plaintext -d '{
+  "workflow_id": "01933d5c-7890-7e23-9abc-123456789012",
+  "namespace": "production",
+  "name": "order-fulfillment",
+  "version": "1.0.0",
+  "input_json": "{\"orderId\": \"12345\", \"customerId\": \"cust-789\"}"
+}' localhost:9000 lemline.gateway.v1.WorkflowGateway/StartWorkflow
+```
+
+```bash Latest version
+grpcurl -plaintext -d '{
+  "workflow_id": "01933d5c-7890-7e23-9abc-123456789013",
+  "namespace": "default",
+  "name": "hello",
+  "version": ""
+}' localhost:9000 lemline.gateway.v1.WorkflowGateway/StartWorkflow
+```
+
+```bash With timezone
+grpcurl -plaintext -d '{
+  "workflow_id": "01933d5c-7890-7e23-9abc-123456789014",
+  "namespace": "production",
+  "name": "scheduled-job",
+  "version": "2.0.0",
+  "zone_id": "America/New_York"
+}' localhost:9000 lemline.gateway.v1.WorkflowGateway/StartWorkflow
+```
+</CodeGroup>
+
+### Using TypeScript (Connect-ES)
+
+```typescript
+import { createPromiseClient } from "@connectrpc/connect";
+import { createGrpcWebTransport } from "@connectrpc/connect-web";
+import { WorkflowGateway } from "./gen/lemline/gateway/v1/workflow_gateway_connect";
+import { uuidv7 } from "uuidv7";
+
+const transport = createGrpcWebTransport({
+  baseUrl: "http://localhost:9000",
+});
+
+const client = createPromiseClient(WorkflowGateway, transport);
+
+// Start a workflow
+const response = await client.startWorkflow({
+  workflowId: uuidv7(),
+  namespace: "production",
+  name: "order-fulfillment",
+  version: "1.0.0",
+  inputJson: JSON.stringify({
+    orderId: "12345",
+    customerId: "cust-789",
+  }),
+});
+
+if (response.result === "START_WORKFLOW_RESULT_ACCEPTED_NEW") {
+  console.log("New workflow started:", response.workflowId);
+} else {
+  console.log("Workflow already exists:", response.workflowId);
+}
+```
+
+### Using Python (grpcio)
+
+```python
+import grpc
+import json
+from uuid import uuid4
+from lemline.gateway.v1 import workflow_gateway_pb2, workflow_gateway_pb2_grpc
+
+# Create channel
+channel = grpc.insecure_channel('localhost:9000')
+stub = workflow_gateway_pb2_grpc.WorkflowGatewayStub(channel)
+
+# Start workflow
+request = workflow_gateway_pb2.StartWorkflowRequest(
+    workflow_id=str(uuid4()),
+    namespace="production",
+    name="order-fulfillment",
+    version="1.0.0",
+    input_json=json.dumps({
+        "orderId": "12345",
+        "customerId": "cust-789"
+    })
+)
+
+response = stub.StartWorkflow(request)
+print(f"Workflow {response.workflow_id}: {response.result}")
+```
+
+## Error handling
+
+The RPC returns gRPC status codes for errors:
+
+<ResponseField name="NOT_FOUND" type="error">
+  Workflow definition not found for the specified namespace, name, and version
+</ResponseField>
+
+<ResponseField name="INVALID_ARGUMENT" type="error">
+  Invalid request parameters (e.g., malformed JSON input, invalid workflow_id)
+</ResponseField>
+
+<ResponseField name="UNAUTHENTICATED" type="error">
+  Missing or invalid JWT token (when authentication is enabled)
+</ResponseField>
+
+<ResponseField name="PERMISSION_DENIED" type="error">
+  JWT token lacks required scopes or namespace access
+</ResponseField>
+
+<ResponseField name="INTERNAL" type="error">
+  Server error (check logs for details)
+</ResponseField>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use UUIDv7 for workflow IDs">
+    UUIDv7 is time-ordered, which improves database performance compared to random UUIDs.
+    
+    ```typescript
+    import { uuidv7 } from "uuidv7";
+    const workflowId = uuidv7();
+    ```
+  </Accordion>
+  
+  <Accordion title="Always specify version in production">
+    Relying on "latest" version can cause unexpected behavior when deploying new workflow versions.
+    
+    ```json
+    {
+      "version": "1.0.0"  // Explicit version
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Validate input JSON before sending">
+    Ensure input JSON is valid before calling StartWorkflow to avoid INVALID_ARGUMENT errors.
+    
+    ```typescript
+    const input = { orderId: "12345" };
+    const inputJson = JSON.stringify(input);  // Validate serialization
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle both ACCEPTED_NEW and ACCEPTED_EXISTING">
+    Idempotent retries will return ACCEPTED_EXISTING. Your client should handle both cases.
+    
+    ```typescript
+    if (response.result !== "START_WORKFLOW_RESULT_UNSPECIFIED") {
+      // Success (new or existing)
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Watch workflows" icon="eye" href="/api/gateway/watch-workflow">
+    Stream workflow lifecycle events
+  </Card>
+  <Card title="CLI instance start" icon="terminal" href="/cli/instance">
+    Start workflows via CLI
+  </Card>
+  <Card title="Authentication" icon="lock" href="/api/gateway/authentication">
+    Secure the gateway with JWT
+  </Card>
+  <Card title="Workflow examples" icon="book" href="/examples/hello-world">
+    Example workflows to get started
+  </Card>
+</CardGroup>

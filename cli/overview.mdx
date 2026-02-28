@@ -1,0 +1,187 @@
+---
+title: CLI Overview
+description: Command-line interface for Lemline workflow runtime
+---
+
+The Lemline CLI provides commands for managing workflow definitions, starting instances, running database migrations, and operating the workflow runtime.
+
+## Installation
+
+The Lemline CLI is distributed as a native executable or can be run via Docker:
+
+```bash
+# Native executable
+lemline --version
+
+# Docker
+docker run lemline/lemline:latest --version
+```
+
+## Global Options
+
+All commands support the following global options:
+
+<ParamField path="--help" type="flag">
+  Display help information for any command
+</ParamField>
+
+<ParamField path="--version" type="flag">
+  Display the CLI version
+</ParamField>
+
+<ParamField path="-c, --config" type="string">
+  Specify configuration file location. Overrides default config resolution.
+</ParamField>
+
+<ParamField path="--json" type="flag">
+  Output logs in JSON format (for machine parsing)
+</ParamField>
+
+### Log Level Options
+
+These options are mutually exclusive:
+
+<ParamField path="--debug" type="flag">
+  Set log level to DEBUG (most verbose)
+</ParamField>
+
+<ParamField path="--info" type="flag">
+  Set log level to INFO
+</ParamField>
+
+<ParamField path="--warn" type="flag">
+  Set log level to WARN
+</ParamField>
+
+<ParamField path="--error" type="flag">
+  Set log level to ERROR (least verbose)
+</ParamField>
+
+## Configuration Resolution
+
+The CLI resolves configuration files in the following order:
+
+1. **CLI argument**: `--config=/path/to/config.yaml`
+2. **Environment variable**: `LEMLINE_CONFIG`
+3. **Current directory**: `.lemline.yaml`
+4. **User config directory**: `~/.config/lemline/config.yaml`
+5. **Home directory**: `~/.lemline.yaml`
+
+## Command Categories
+
+### Runtime Operations
+
+- [**listen**](/cli/listen) - Start the workflow message consumer
+- [**gateway**](/cli/gateway) - Start the gRPC gateway server
+
+### Workflow Management
+
+- [**definition**](/cli/definition) - Manage workflow definitions (get, post, delete)
+- [**instance**](/cli/instance) - Start workflow instances
+
+### System Management
+
+- [**migrate**](/cli/migrate) - Run database migrations
+- [**config**](/cli/config) - Display and manage configuration
+
+## Quick Start Examples
+
+### Start the Runtime
+
+```bash
+# Start the workflow consumer
+lemline listen
+
+# Start with custom metrics port
+lemline listen --metrics-port 9091
+```
+
+### Manage Workflow Definitions
+
+```bash
+# Upload a workflow definition
+lemline definition post -f workflow.yaml
+
+# View a workflow definition
+lemline definition get default my-workflow 1.0
+
+# Delete a workflow
+lemline definition delete default my-workflow 1.0
+```
+
+### Start Workflow Instances
+
+```bash
+# Start a workflow instance
+lemline instance start default my-workflow
+
+# Start with input data
+lemline instance start default my-workflow --input '{"user": "alice"}'
+
+# Start specific version
+lemline instance start default my-workflow 2.0 --input '{"count": 5}'
+```
+
+### Database Operations
+
+```bash
+# Check migration status
+lemline migrate status
+
+# Run pending migrations
+lemline migrate
+
+# Preview migrations without applying
+lemline migrate --pretend
+```
+
+### Configuration
+
+```bash
+# Display current configuration
+lemline config show
+
+# Display as properties
+lemline config show --format properties
+```
+
+## Error Handling
+
+The CLI provides clear error messages and uses standard exit codes:
+
+- **0**: Success
+- **1**: General error
+- **2**: Command-line syntax error
+
+Use `--debug` to see detailed stack traces and diagnostic information:
+
+```bash
+lemline --debug definition post -f workflow.yaml
+```
+
+## Environment Variables
+
+<ParamField path="LEMLINE_CONFIG" type="string">
+  Path to configuration file (overridden by `--config`)
+</ParamField>
+
+<ParamField path="LEMLINE_LOG_LEVEL" type="string">
+  Default log level: `DEBUG`, `INFO`, `WARN`, `ERROR`
+</ParamField>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Listen Command" icon="ear-listen" href="/cli/listen">
+    Start the workflow message consumer
+  </Card>
+  <Card title="Definition Commands" icon="file-code" href="/cli/definition">
+    Manage workflow definitions
+  </Card>
+  <Card title="Instance Commands" icon="play" href="/cli/instance">
+    Start workflow instances
+  </Card>
+  <Card title="Migrate Command" icon="database" href="/cli/migrate">
+    Manage database migrations
+  </Card>
+</CardGroup>

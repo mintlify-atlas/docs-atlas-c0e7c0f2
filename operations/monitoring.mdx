@@ -1,0 +1,195 @@
+---
+title: Monitoring Setup
+description: Configure monitoring and metrics collection for Lemline
+---
+
+## Overview
+
+Lemline provides comprehensive monitoring capabilities through Micrometer integration, exposing Prometheus-compatible metrics for workflows, retries, failures, and system health.
+
+## Metrics Endpoint
+
+Metrics are exposed through a dedicated HTTP endpoint that runs independently from the main workflow processing.
+
+### Default Configuration
+
+```yaml
+lemline:
+  metrics:
+    port: 8080
+    path: /q/metrics
+```
+
+The metrics endpoint is available at `http://localhost:8080/q/metrics` by default.
+
+### CLI Override
+
+You can override the metrics port when starting the runner:
+
+```bash
+# JVM mode
+java -jar lemline-runner.jar listen --metrics-port 9090
+
+# Native binary
+./lemline listen --metrics-port 9090
+
+# Gateway mode
+./lemline gateway start --grpc-port 9090 --metrics-port 8081
+```
+
+## Prometheus Integration
+
+Configure Prometheus to scrape Lemline metrics:
+
+```yaml
+scrape_configs:
+  - job_name: 'lemline'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/q/metrics'
+    scrape_interval: 15s
+```
+
+### Key Metrics
+
+Lemline exposes the following metric categories:
+
+#### Workflow Metrics
+
+- `lemline.workflow.instances.active` - Number of active workflow instances
+- `lemline.workflow.instances.completed` - Total completed workflows
+- `lemline.workflow.instances.failed` - Total failed workflows
+- `lemline.workflow.execution.duration` - Workflow execution time
+
+#### Task Metrics
+
+- `lemline.task.executions` - Task execution counts by type
+- `lemline.task.duration` - Task execution duration by type
+- `lemline.task.failures` - Task failure counts by reason
+
+#### System Metrics
+
+- `lemline.retry.scheduled` - Scheduled retry operations
+- `lemline.retry.executed` - Executed retries
+- `lemline.wait.scheduled` - Scheduled wait operations
+- `lemline.database.connections` - Active database connections
+- `lemline.messaging.messages.processed` - Message processing rate
+
+#### JVM Metrics (JVM mode only)
+
+- `jvm.memory.used` - JVM memory usage
+- `jvm.gc.pause` - Garbage collection pause time
+- `jvm.threads.live` - Active thread count
+
+## Grafana Dashboards
+
+### Creating a Dashboard
+
+1. Add Prometheus as a data source in Grafana
+2. Create a new dashboard
+3. Add panels for key metrics
+
+### Sample Panel Queries
+
+**Active Workflows:**
+```promql
+lemline_workflow_instances_active
+```
+
+**Workflow Success Rate:**
+```promql
+rate(lemline_workflow_instances_completed[5m]) / 
+(rate(lemline_workflow_instances_completed[5m]) + rate(lemline_workflow_instances_failed[5m]))
+```
+
+**Task Execution Duration (p95):**
+```promql
+histogram_quantile(0.95, rate(lemline_task_duration_bucket[5m]))
+```
+
+**Database Connection Pool Usage:**
+```promql
+lemline_database_connections / lemline_database_connections_max
+```
+
+## Metric Tags
+
+Add custom tags to all metrics for environment identification:
+
+```yaml
+lemline:
+  metrics:
+    tags:
+      environment: production
+      region: us-west-2
+      cluster: main
+```
+
+Tags appear on all exported metrics and help with filtering in Prometheus/Grafana.
+
+## Alerting Rules
+
+Configure Prometheus alerting rules for critical conditions:
+
+```yaml
+groups:
+  - name: lemline
+    interval: 30s
+    rules:
+      - alert: HighWorkflowFailureRate
+        expr: |
+          rate(lemline_workflow_instances_failed[5m]) / 
+          rate(lemline_workflow_instances_completed[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High workflow failure rate detected"
+          description: "Failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: DatabaseConnectionPoolExhausted
+        expr: lemline_database_connections / lemline_database_connections_max > 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+
+      - alert: WorkflowExecutionSlow
+        expr: histogram_quantile(0.95, rate(lemline_workflow_execution_duration_bucket[5m])) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workflow execution time is high"
+
+      - alert: MessageProcessingLag
+        expr: rate(lemline_messaging_messages_processed[1m]) < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Message processing rate is low"
+```
+
+## Native Binary Limitations
+
+When running as a native binary (GraalVM), JVM-specific metrics are not available:
+
+- JVM memory metrics
+- Garbage collection metrics
+- Thread pool metrics
+- Class loading metrics
+
+System-level monitoring (CPU, memory) should be handled by infrastructure monitoring tools.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Observability" href="./observability" icon="chart-line">
+    Configure health checks and logging
+  </Card>
+  <Card title="Troubleshooting" href="./troubleshooting" icon="wrench">
+    Common issues and solutions
+  </Card>
+</CardGroup>

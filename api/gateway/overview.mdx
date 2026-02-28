@@ -1,0 +1,187 @@
+---
+title: gRPC gateway overview
+description: Overview of the Lemline gRPC gateway API for workflow management
+---
+
+The Lemline gRPC gateway provides a production-ready API for starting workflows, querying definitions, watching workflow execution, and accessing analytics data.
+
+## Gateway architecture
+
+The gateway is built on top of the core Lemline runtime and provides:
+
+- **gRPC API** - High-performance RPC protocol with streaming support
+- **Idempotent workflow starts** - Client-provided workflow IDs prevent duplicates
+- **Real-time streaming** - Watch workflow lifecycle events as they happen
+- **Analytics integration** - Query workflow statistics and timelines
+- **JWT authentication** - Secure access with scope and namespace authorization
+- **TLS/SSL support** - Encrypted communication for production deployments
+
+<CardGroup cols={2}>
+  <Card title="Start workflows" icon="play" href="/api/gateway/start-workflow">
+    Start workflow instances with idempotency
+  </Card>
+  <Card title="Watch workflows" icon="eye" href="/api/gateway/watch-workflow">
+    Stream lifecycle events in real-time
+  </Card>
+  <Card title="Authentication" icon="lock" href="/api/gateway/authentication">
+    JWT authentication and authorization
+  </Card>
+  <Card title="CLI gateway" icon="terminal" href="/cli/gateway">
+    Start the gateway server
+  </Card>
+</CardGroup>
+
+## Service definition
+
+The gateway exposes the `WorkflowGateway` service with the following RPCs:
+
+```protobuf
+service WorkflowGateway {
+  // Start a workflow instance
+  rpc StartWorkflow(StartWorkflowRequest) returns (StartWorkflowResponse);
+  
+  // Stream workflow lifecycle events
+  rpc WatchWorkflow(WatchWorkflowRequest) returns (stream WorkflowAnalyticsEvent);
+  
+  // List all namespaces
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  
+  // List workflow definitions
+  rpc ListDefinitions(ListDefinitionsRequest) returns (ListDefinitionsResponse);
+  
+  // Get a specific workflow definition
+  rpc GetDefinition(GetDefinitionRequest) returns (GetDefinitionResponse);
+  
+  // Get workflow statistics
+  rpc GetDefinitionStats(GetDefinitionStatsRequest) returns (GetDefinitionStatsResponse);
+  
+  // List workflow instances
+  rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
+  
+  // Get workflow instance timeline
+  rpc GetInstanceTimeline(GetInstanceTimelineRequest) returns (GetInstanceTimelineResponse);
+  
+  // Stream definition statistics updates
+  rpc WatchDefinitionStats(WatchDefinitionStatsRequest) returns (stream DefinitionStatsUpdate);
+  
+  // Stream instance updates
+  rpc WatchInstances(WatchInstancesRequest) returns (stream InstanceUpdate);
+}
+```
+
+## Starting the gateway
+
+Start the gateway using the CLI:
+
+```bash
+lemline gateway start
+```
+
+The gateway requires:
+- Runner database configuration for outbox persistence
+- Messaging configuration to publish workflow commands
+- Analytics database for watch/query operations
+
+See [Gateway Configuration](/configuration/gateway) for details.
+
+## Client examples
+
+### Using grpcurl
+
+```bash
+# Start a workflow
+grpcurl -plaintext -d '{
+  "workflow_id": "wf-123",
+  "namespace": "default",
+  "name": "hello",
+  "version": "1.0",
+  "input_json": "{\"name\": \"World\"}"
+}' localhost:9000 lemline.gateway.v1.WorkflowGateway/StartWorkflow
+
+# Watch workflow events
+grpcurl -plaintext -d '{
+  "workflow_id": "wf-123"
+}' localhost:9000 lemline.gateway.v1.WorkflowGateway/WatchWorkflow
+```
+
+### Using TypeScript (Connect-ES)
+
+```typescript
+import { createPromiseClient } from "@connectrpc/connect";
+import { createGrpcWebTransport } from "@connectrpc/connect-web";
+import { WorkflowGateway } from "./gen/lemline/gateway/v1/workflow_gateway_connect";
+
+const transport = createGrpcWebTransport({
+  baseUrl: "http://localhost:9000",
+});
+
+const client = createPromiseClient(WorkflowGateway, transport);
+
+// Start a workflow
+const response = await client.startWorkflow({
+  workflowId: "wf-123",
+  namespace: "default",
+  name: "hello",
+  version: "1.0",
+  inputJson: JSON.stringify({ name: "World" }),
+});
+
+console.log(response);
+```
+
+## Port configuration
+
+The gateway uses two ports:
+
+<ParamField path="grpc.port" type="number" default="9000">
+  gRPC server port for API requests
+</ParamField>
+
+<ParamField path="metrics.port" type="number" default="8080">
+  HTTP port for metrics and health checks
+</ParamField>
+
+Override ports via CLI:
+
+```bash
+lemline gateway start --grpc-port 9001 --metrics-port 8081
+```
+
+## Security
+
+<CardGroup cols={2}>
+  <Card title="TLS/SSL" icon="shield">
+    Enable TLS for encrypted communication in production
+  </Card>
+  <Card title="JWT Authentication" icon="key">
+    Secure access with JWT tokens and scope-based authorization
+  </Card>
+</CardGroup>
+
+See [Gateway Authentication](/api/gateway/authentication) for configuration details.
+
+## Observability
+
+The gateway exposes standard metrics and health endpoints:
+
+- **Metrics**: `http://localhost:8080/metrics` (Prometheus format)
+- **Health**: `http://localhost:8080/health`
+- **Liveness**: `http://localhost:8080/health/live`
+- **Readiness**: `http://localhost:8080/health/ready`
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Start workflows" icon="play" href="/api/gateway/start-workflow">
+    Learn how to start workflow instances
+  </Card>
+  <Card title="Watch workflows" icon="eye" href="/api/gateway/watch-workflow">
+    Stream workflow execution events
+  </Card>
+  <Card title="Configure gateway" icon="gear" href="/configuration/gateway">
+    Set up TLS, authentication, and CORS
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/cli/gateway">
+    Gateway command-line options
+  </Card>
+</CardGroup>

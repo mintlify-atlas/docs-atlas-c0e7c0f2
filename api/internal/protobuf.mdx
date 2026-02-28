@@ -1,0 +1,342 @@
+---
+title: Protobuf message schemas
+description: Internal Protocol Buffers schemas for workflow messaging
+---
+
+Lemline uses Protocol Buffers for internal messaging to achieve efficient serialization, strong typing, and backward compatibility.
+
+## Why Protocol Buffers?
+
+<CardGroup cols={2}>
+  <Card title="Compact serialization" icon="compress">
+    Binary format reduces message size by 50-80% compared to JSON
+  </Card>
+  <Card title="Strong typing" icon="shield">
+    Compile-time validation prevents serialization errors
+  </Card>
+  <Card title="Backward compatibility" icon="clock-rotate-left">
+    Add new fields without breaking existing consumers
+  </Card>
+  <Card title="Cross-language" icon="globe">
+    Generated clients for Kotlin, TypeScript, Python, Go, etc.
+  </Card>
+</CardGroup>
+
+## Schema overview
+
+Internal schemas are defined in `lemline-messages-proto/src/main/proto/internal/`:
+
+```
+internal/
+├── common.proto              # Shared types (timestamps, errors)
+├── state/
+│   ├── node_state.proto      # Task state variants
+│   └── node_stack.proto      # Execution stack frames
+└── workflow/
+    ├── commands.proto        # Workflow command messages
+    ├── events.proto          # Workflow event messages
+    ├── configs.proto         # Configuration messages
+    └── envelope.proto        # Message envelopes
+```
+
+## Workflow commands
+
+Commands flow through the `commands-in` and `commands-out` channels:
+
+### WorkflowCommand
+
+```protobuf
+message WorkflowCommand {
+  string workflow_id = 1;
+  string namespace = 2;
+  string name = 3;
+  string version = 4;
+  bytes workflow_state = 5;      // Compressed InstanceState
+  optional string input_json = 6;
+  optional string zone_id = 7;
+  optional string correlation_id = 8;
+}
+```
+
+### InstanceState (embedded in workflow_state)
+
+```protobuf
+message InstanceState {
+  map<string, NodeState> states = 1;  // Node position -> state
+  NodePosition current_position = 2;
+  WorkflowStatus status = 3;
+  optional string output_json = 4;
+  optional ErrorDetail error = 5;
+}
+
+enum WorkflowStatus {
+  WORKFLOW_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_STATUS_RUNNING = 1;
+  WORKFLOW_STATUS_WAITING = 2;
+  WORKFLOW_STATUS_COMPLETED = 3;
+  WORKFLOW_STATUS_FAULTED = 4;
+}
+```
+
+## Workflow events
+
+Events flow through the `events-out` channel for durable operations:
+
+### WorkflowEvent
+
+```protobuf
+message WorkflowEvent {
+  string workflow_id = 1;
+  string event_type = 2;
+  bytes payload = 3;
+  int64 sequence = 4;
+  string created_at = 5;
+}
+```
+
+### Event types
+
+| Event Type | Payload | Purpose |
+|------------|---------|----------|
+| `RETRY_SCHEDULED` | `RetryPayload` | Task retry scheduled |
+| `WAIT_SCHEDULED` | `WaitPayload` | Wait task created |
+| `FORK_CREATED` | `ForkPayload` | Fork branches spawned |
+| `LISTEN_CREATED` | `ListenPayload` | Listen task waiting |
+| `SCHEDULE_CREATED` | `SchedulePayload` | Workflow scheduled |
+
+## Node state variants
+
+Each task type has a specific state structure:
+
+```protobuf
+message NodeState {
+  oneof state {
+    RootState root = 1;
+    DoState do = 2;
+    SwitchState switch = 3;
+    ForState for = 4;
+    TryState try = 5;
+    ForkState fork = 6;
+    // ... other task types
+  }
+}
+
+message DoState {
+  int32 current_index = 1;
+  repeated string completed_tasks = 2;
+}
+
+message ForkState {
+  repeated string branch_ids = 1;
+  map<string, BranchStatus> branch_statuses = 2;
+}
+
+message TryState {
+  bool in_catch = 1;
+  optional ErrorDetail caught_error = 2;
+}
+```
+
+## Error representation
+
+```protobuf
+message ErrorDetail {
+  string type = 1;              // RFC 7807 error type URI
+  int32 status = 2;             // HTTP-style status code
+  string title = 3;             // Human-readable summary
+  optional string detail = 4;   // Detailed error message
+  optional string instance = 5; // Error instance identifier
+}
+```
+
+Example:
+```json
+{
+  "type": "https://lemline.com/errors/validation",
+  "status": 400,
+  "title": "Validation error",
+  "detail": "Invalid input: missing required field 'orderId'",
+  "instance": "wf-123/root.do.0"
+}
+```
+
+## Message envelope
+
+All broker messages are wrapped in an envelope:
+
+```protobuf
+message MessageEnvelope {
+  string message_id = 1;        // UUIDv7
+  string message_type = 2;      // COMMAND, EVENT, LIFECYCLE
+  bytes payload = 3;            // Serialized message
+  string created_at = 4;        // ISO 8601 timestamp
+  optional string correlation_id = 5;
+}
+```
+
+## Serialization format
+
+### Transport (broker messages)
+
+Internal messages use **Protobuf binary** format:
+
+```kotlin
+// Serialize
+val bytes = workflowCommand.toByteArray()
+
+// Deserialize
+val command = WorkflowCommand.parseFrom(bytes)
+```
+
+### Storage (database)
+
+Database payloads use **Protobuf JSON** for human readability:
+
+```kotlin
+// Serialize to JSON
+val json = JsonFormat.printer().print(workflowCommand)
+
+// Deserialize from JSON
+val builder = WorkflowCommand.newBuilder()
+JsonFormat.parser().merge(json, builder)
+val command = builder.build()
+```
+
+## Backward compatibility rules
+
+<Warning>
+  Follow these rules to maintain backward compatibility when evolving schemas:
+</Warning>
+
+<AccordionGroup>
+  <Accordion title="Never reuse field numbers">
+    Once a field number is assigned, it's permanently reserved.
+    
+    ```protobuf
+    message Example {
+      string old_field = 1 [deprecated = true];  // Don't remove
+      string new_field = 2;                      // Use next number
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Reserve removed fields">
+    When removing a field, reserve both its number and name.
+    
+    ```protobuf
+    message Example {
+      reserved 3;                  // Field number
+      reserved "removed_field";   // Field name
+      string active_field = 4;
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Use optional for new fields">
+    New fields must be optional to maintain compatibility with older messages.
+    
+    ```protobuf
+    message Example {
+      string required_field = 1;      // Existing
+      optional string new_field = 2;  // New (optional)
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Enums must have _UNSPECIFIED = 0">
+    First enum value must be `*_UNSPECIFIED = 0` for default behavior.
+    
+    ```protobuf
+    enum Status {
+      STATUS_UNSPECIFIED = 0;  // Required
+      STATUS_ACTIVE = 1;
+      STATUS_COMPLETED = 2;
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Code generation
+
+Protobuf schemas are compiled to Kotlin classes:
+
+```bash
+# Generate Kotlin code
+./gradlew :lemline-messages-proto:build
+```
+
+Generated classes:
+- `com.lemline.messages.internal.workflow.WorkflowCommand`
+- `com.lemline.messages.internal.workflow.WorkflowEvent`
+- `com.lemline.messages.internal.state.NodeState`
+
+## Usage examples
+
+### Creating a workflow command
+
+```kotlin
+import com.lemline.messages.internal.workflow.WorkflowCommand
+
+val command = WorkflowCommand.newBuilder()
+    .setWorkflowId("wf-123")
+    .setNamespace("production")
+    .setName("order-fulfillment")
+    .setVersion("1.0.0")
+    .setWorkflowState(compressedState)
+    .setInputJson("{}")
+    .build()
+
+// Serialize to bytes
+val bytes = command.toByteArray()
+```
+
+### Parsing a workflow event
+
+```kotlin
+import com.lemline.messages.internal.workflow.WorkflowEvent
+
+// Deserialize from bytes
+val event = WorkflowEvent.parseFrom(bytes)
+
+when (event.eventType) {
+    "RETRY_SCHEDULED" -> {
+        val payload = RetryPayload.parseFrom(event.payload)
+        handleRetry(payload)
+    }
+    "WAIT_SCHEDULED" -> {
+        val payload = WaitPayload.parseFrom(event.payload)
+        handleWait(payload)
+    }
+}
+```
+
+## Schema validation
+
+Lemline uses `buf` for schema linting and breaking change detection:
+
+```bash
+# Lint schemas
+buf lint
+
+# Check for breaking changes
+buf breaking --against .git#branch=main
+```
+
+See `docs/protobuf-messaging.md` in the source repository for the full policy.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Messaging architecture" icon="network-wired" href="/api/internal/messaging">
+    Learn about dual-channel messaging
+  </Card>
+  <Card title="Outbox pattern" icon="database" href="/api/internal/outbox-pattern">
+    Reliable message delivery
+  </Card>
+  <Card title="State management" icon="sitemap" href="/concepts/state-management">
+    Workflow state structure
+  </Card>
+  <Card title="Protocol Buffers" icon="book" href="https://protobuf.dev/">
+    Official Protobuf documentation
+  </Card>
+</CardGroup>

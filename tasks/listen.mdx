@@ -1,0 +1,510 @@
+---
+title: Listen Task
+description: Wait for external events before continuing workflow execution
+---
+
+The Listen task pauses workflow execution until specific external events are received, enabling event-driven workflow patterns.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: wait-for-approval
+  version: '1.0.0'
+do:
+  - submitRequest:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/requests
+        body: "${ .request }"
+  
+  - waitForApproval:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.request.approved
+              subject: "${ .body.requestId }"
+        timeout:
+          after: PT24H
+  
+  - processApproval:
+      set:
+        status: approved
+        approvedBy: "${ .[0].approver }"
+```
+
+## Consumption Strategies
+
+### Listen for One Event
+
+Wait for a single specific event:
+
+```yaml
+- waitForCompletion:
+    listen:
+      to:
+        one:
+          with:
+            type: com.example.job.completed
+            subject: "${ .jobId }"
+      timeout:
+        after: PT1H
+```
+
+### Listen for Any Event
+
+Complete when any of the specified events arrive:
+
+```yaml
+- waitForDecision:
+    listen:
+      to:
+        any:
+          - with:
+              type: com.example.request.approved
+              subject: "${ .requestId }"
+          - with:
+              type: com.example.request.rejected
+              subject: "${ .requestId }"
+      timeout:
+        after: PT48H
+# Output is array containing whichever event arrived first
+```
+
+### Listen for All Events
+
+Wait until all specified events have been received:
+
+```yaml
+- waitForAllConfirmations:
+    listen:
+      to:
+        all:
+          - with:
+              type: com.example.inventory.confirmed
+              subject: "${ .orderId }"
+          - with:
+              type: com.example.payment.confirmed
+              subject: "${ .orderId }"
+          - with:
+              type: com.example.shipping.confirmed
+              subject: "${ .orderId }"
+      timeout:
+        after: PT2H
+# Output is array containing all three events
+```
+
+## Complete Examples
+
+### Order Approval Workflow
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-approval
+  version: '1.0.0'
+do:
+  - createOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/orders
+        body:
+          customerId: "${ .customerId }"
+          items: "${ .items }"
+          total: "${ .total }"
+      output:
+        as: "${ .body }"
+  
+  - notifyApprover:
+      call: http
+      with:
+        method: post
+        endpoint: https://notifications.example.com/api/send
+        body:
+          to: "${ .approver }"
+          template: order_approval_required
+          data:
+            orderId: "${ .orderId }"
+            total: "${ .total }"
+  
+  - waitForDecision:
+      listen:
+        to:
+          any:
+            - with:
+                type: com.example.order.approved
+                subject: "${ .orderId }"
+                data: "${ .approved == true }"
+            - with:
+                type: com.example.order.rejected
+                subject: "${ .orderId }"
+                data: "${ .rejected == true }"
+        timeout:
+          after: PT72H
+  
+  - processDecision:
+      switch:
+        - approved:
+            when: "${ .[0].approved == true }"
+            then: fulfillOrder
+        - rejected:
+            when: "${ .[0].rejected == true }"
+            then: cancelOrder
+  
+  - fulfillOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://fulfillment.example.com/api/fulfill
+        body:
+          orderId: "${ .orderId }"
+      then: end
+  
+  - cancelOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/orders/{orderId}/cancel
+```
+
+### Multi-Stage Document Collection
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: document-collection
+  version: '1.0.0'
+do:
+  - initializeApplication:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/applications
+        body: "${ .applicant }"
+      output:
+        as: "${ .body.applicationId }"
+      export:
+        as: "${ { applicationId: . } }"
+  
+  - requestDocuments:
+      call: http
+      with:
+        method: post
+        endpoint: https://notifications.example.com/api/send
+        body:
+          to: "${ .applicant.email }"
+          template: documents_required
+          data:
+            applicationId: "${ $context.applicationId }"
+  
+  - waitForAllDocuments:
+      listen:
+        to:
+          all:
+            - with:
+                type: com.example.document.submitted
+                data: "${ .documentType == 'identity' and .applicationId == $context.applicationId }"
+            - with:
+                type: com.example.document.submitted
+                data: "${ .documentType == 'proof_of_income' and .applicationId == $context.applicationId }"
+            - with:
+                type: com.example.document.submitted
+                data: "${ .documentType == 'bank_statement' and .applicationId == $context.applicationId }"
+        read: envelope  # Get full event envelope
+        timeout:
+          after: PT14D
+  
+  - verifyDocuments:
+      set:
+        documents:
+          identity: "${ .[0].data.documentId }"
+          income: "${ .[1].data.documentId }"
+          bankStatement: "${ .[2].data.documentId }"
+          submittedAt: "${ now() }"
+```
+
+### IoT Sensor Monitoring
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: iot
+  name: sensor-alert
+  version: '1.0.0'
+do:
+  - startMonitoring:
+      call: http
+      with:
+        method: post
+        endpoint: https://iot.example.com/api/monitoring/start
+        body:
+          sensorId: "${ .sensorId }"
+          duration: PT24H
+  
+  - waitForAlert:
+      listen:
+        to:
+          any:
+            - with:
+                source: iot-sensor-service
+                type: com.example.sensor.temperature.critical
+                data: "${ .sensorId == $workflow.input.sensorId and .temperature > 80 }"
+            - with:
+                source: iot-sensor-service
+                type: com.example.sensor.humidity.critical
+                data: "${ .sensorId == $workflow.input.sensorId and .humidity > 90 }"
+            - with:
+                source: iot-sensor-service
+                type: com.example.sensor.pressure.critical
+                data: "${ .sensorId == $workflow.input.sensorId and .pressure < 10 }"
+        until:
+          with:
+            type: com.example.monitoring.stopped
+            subject: "${ .sensorId }"
+        timeout:
+          after: PT24H
+  
+  - triggerAlert:
+      call: http
+      with:
+        method: post
+        endpoint: https://alerts.example.com/api/trigger
+        body:
+          sensorId: "${ .sensorId }"
+          alertType: "${ .[0].type }"
+          reading: "${ .[0].data }"
+          timestamp: "${ .[0].time }"
+```
+
+### Event Correlation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: correlated-events
+  version: '1.0.0'
+do:
+  - initiateProcess:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/process/start
+        body: "${ .input }"
+      output:
+        as: "${ .body.processId }"
+      export:
+        as: "${ { processId: . } }"
+  
+  - waitForStageCompletion:
+      listen:
+        to:
+          all:
+            - with:
+                type: com.example.process.stage.completed
+                data: "${ .processId == $context.processId and .stage == 1 }"
+            - with:
+                type: com.example.process.stage.completed
+                data: "${ .processId == $context.processId and .stage == 2 }"
+            - with:
+                type: com.example.process.stage.completed
+                data: "${ .processId == $context.processId and .stage == 3 }"
+        read: data  # Only get event data
+        timeout:
+          after: PT6H
+  
+  - summarizeResults:
+      set:
+        completion:
+          processId: "${ $context.processId }"
+          stages:
+            - "${ .[0] }"
+            - "${ .[1] }"
+            - "${ .[2] }"
+          completedAt: "${ now() }"
+```
+
+## Configuration
+
+### to (required)
+
+Defines which events to listen for:
+
+- `one` - Wait for a single specific event
+- `any` - Wait for any one of multiple events
+- `all` - Wait for all specified events
+
+### with
+
+Event matching criteria (CloudEvents attributes):
+
+- `type` - Event type
+- `source` - Event source
+- `subject` - Event subject
+- `data` - Filter expression evaluated against event data
+
+### read (optional)
+
+Specifies what to include in output:
+
+- `data` (default) - Event data only
+- `envelope` - Full event envelope (context + data)
+- `raw` - Raw event data
+
+### until (optional)
+
+Defines an alternative exit condition:
+
+```yaml
+listen:
+  to:
+    one:
+      with:
+        type: com.example.job.completed
+  until:
+    with:
+      type: com.example.job.cancelled
+  timeout:
+    after: PT1H
+```
+
+### timeout (optional)
+
+Maximum time to wait for events:
+
+```yaml
+listen:
+  to:
+    # ...
+  timeout:
+    after: PT30M  # ISO 8601 duration
+```
+
+If timeout is reached, the task raises a timeout error.
+
+## Event Filtering
+
+Use the `data` filter to match event payload:
+
+```yaml
+listen:
+  to:
+    one:
+      with:
+        type: com.example.order.updated
+        data: "${ .status == 'shipped' and .orderId == .currentOrderId }"
+```
+
+## Error Handling
+
+### Timeout Handling
+
+```yaml
+do:
+  - waitWithTimeout:
+      try:
+        - listenForEvent:
+            listen:
+              to:
+                one:
+                  with:
+                    type: com.example.event
+              timeout:
+                after: PT5M
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/timeout
+        do:
+          - handleTimeout:
+              set:
+                result:
+                  success: false
+                  reason: Event not received within timeout
+```
+
+## Output Format
+
+Listener output is always an array containing the consumed events:
+
+- `one` strategy: Array with single event
+- `any` strategy: Array with first matching event
+- `all` strategy: Array with all matching events
+
+```yaml
+# After listening for one event:
+# Output: [{ eventData }]
+
+# After listening for all three events:
+# Output: [{ event1Data }, { event2Data }, { event3Data }]
+```
+
+Access event data by index:
+
+```yaml
+- processEvents:
+    set:
+      firstEvent: "${ .[0] }"
+      allEvents: "${ . }"
+```
+
+## Best Practices
+
+1. **Always set timeouts** - Prevent workflows from waiting indefinitely
+2. **Use correlation** - Filter events by correlation ID or subject
+3. **Handle timeouts** - Wrap Listen in Try/Catch to handle timeout errors
+4. **Filter precisely** - Use `data` filters to match exact event criteria
+5. **Use until for cancellation** - Provide alternative exit conditions
+6. **Choose appropriate read mode** - Use `data` for payload, `envelope` for metadata
+7. **Document event contracts** - Clearly define expected event formats
+
+## Common Patterns
+
+### Request-Response via Events
+
+```yaml
+do:
+  - sendRequest:
+      emit:
+        event:
+          with:
+            type: com.example.request.submitted
+            data: "${ .request }"
+  - waitForResponse:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.request.response
+              subject: "${ .request.id }"
+```
+
+### Human Task Waiting
+
+```yaml
+do:
+  - assignTask:
+      call: http
+      # Assign human task
+  - waitForCompletion:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.task.completed
+        timeout:
+          after: PT7D
+```
+
+## Related Topics
+
+- [Emit Task](/tasks/emit) - Publish events
+- [Try/Catch](/tasks/try-catch) - Handle timeout errors
+- [Switch Task](/tasks/switch) - Branch based on received events

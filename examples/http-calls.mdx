@@ -1,0 +1,342 @@
+---
+title: HTTP API Calls
+description: Integrate with REST APIs in your workflows
+icon: globe
+---
+
+Lemline makes it easy to call HTTP APIs from your workflows. This guide covers everything from simple GET requests to complex authenticated calls.
+
+## Basic GET Request
+
+The simplest HTTP call retrieves data from an endpoint:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: call-http-shorthand-endpoint
+  version: '0.1.0'
+do:
+  - getPet:
+      call: http
+      with:
+        method: get
+        endpoint: https://petstore.swagger.io/v2/pet/{petId}
+```
+
+<Note>
+The `{petId}` path parameter will be interpolated from the workflow input or context.
+</Note>
+
+## Query Parameters
+
+Pass query parameters using the `query` property:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: http-query-params
+  version: '1.0.0'
+input:
+  schema:
+    format: json
+    document:
+      type: object
+      required:
+        - searchQuery
+      properties:
+        searchQuery:
+          type: string
+do:
+  - searchStarWarsCharacters:
+      call: http
+      with:
+        method: get
+        endpoint: https://swapi.dev/api/people/
+        query:
+          search: ${ .searchQuery }
+```
+
+**Example input:**
+```json
+{
+  "searchQuery": "Luke"
+}
+```
+
+## POST Requests with Body
+
+Send data in the request body:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: create-user
+  version: '1.0.0'
+do:
+  - registerUser:
+      call: http
+      with:
+        method: post
+        endpoint: https://accounts.example.com/api/users
+        headers:
+          Content-Type: application/json
+        body:
+          email: ${ .email }
+          name: ${ .name }
+          verificationStatus: "verified"
+```
+
+## Capturing Response Data
+
+Use `output` to capture the API response:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: star-wars-homeplanet
+  version: '1.0.0'
+do:
+  - getStarWarsCharacter:
+      call: http
+      with:
+        method: get
+        endpoint: https://swapi.dev/api/people/{id}
+        output: response
+      export:
+        as:
+          homeworld: ${ .content.homeworld }
+  - getStarWarsHomeworld:
+      call: http
+      with:
+        method: get
+        endpoint: ${ $context.homeworld }
+```
+
+This workflow:
+1. Fetches character data and captures it in `response`
+2. Exports the `homeworld` URL to the context
+3. Uses that URL to fetch the homeworld data
+
+## Multiple Sequential HTTP Calls
+
+Chain API calls together:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: pet-purchase
+  version: '0.1.0'
+do:
+  - getPet:
+      call: http
+      with:
+        method: get
+        endpoint: https://petstore.swagger.io/v2/pet/{petId}
+  - buyPet:
+      call: http
+      with:
+        method: put
+        endpoint: https://petstore.swagger.io/v2/pet/{petId}
+        body: ${ . + { status: "sold" } }
+```
+
+<Tip>
+The expression `${ . + { status: "sold" } }` merges the current context (`.`) with a new `status` field.
+</Tip>
+
+## Authentication
+
+### OAuth2 Client Credentials
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: oauth2-authentication
+  version: '0.1.0'
+do:
+  - getPet:
+      call: http
+      with:
+        method: get
+        endpoint:
+          uri: https://petstore.swagger.io/v2/pet/{petId}
+          authentication:
+            oauth2:
+              authority: http://keycloak/realms/fake-authority
+              endpoints:
+                token: /auth/token
+                introspection: /auth/introspect
+              grant: client_credentials
+              client:
+                id: workflow-runtime-id
+                secret: workflow-runtime-secret
+```
+
+### Bearer Token
+
+```yaml
+do:
+  - callWithBearer:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/data
+        headers:
+          Authorization: Bearer ${ $secrets.API_TOKEN }
+```
+
+### API Key
+
+```yaml
+do:
+  - callWithApiKey:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/data
+        headers:
+          X-API-Key: ${ $secrets.API_KEY }
+```
+
+## Handling API Rate Limits
+
+Implement throttling to respect rate limits:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: api-throttling
+  version: '1.0.0'
+do:
+  - processBatches:
+      for:
+        in: ${ chunk(.items, 5) }
+        each: batch
+      do:
+        - processBatch:
+            for:
+              in: ${ $batch }
+              each: item
+            do:
+              - processItem:
+                  try:
+                    - callRateLimitedAPI:
+                        call: http
+                        with:
+                          method: get
+                          endpoint: https://api.example.com/items/${$item}
+                  catch:
+                    errors:
+                      with:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                        status: 429
+                    retry:
+                      delay:
+                        seconds: 10
+                      backoff:
+                        exponential: {}
+                      limit:
+                        attempt:
+                          count: 3
+        - throttleBetweenBatches:
+            wait:
+              duration:
+                seconds: 2
+```
+
+This workflow:
+- Processes items in batches of 5
+- Waits 2 seconds between batches
+- Retries with exponential backoff on 429 (Too Many Requests)
+
+## Pagination
+
+Handle paginated API responses:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: list-all-users
+  version: '1.0.0'
+do:
+  - initializeUserList:
+      set:
+        allUsers: []
+        nextPage: 1
+        hasMorePages: true
+      export:
+        as: '$context + { allUsers: [], nextPage: 1, hasMorePages: true }'
+
+  - fetchAllPages:
+      while: ${ $context.hasMorePages }
+      do:
+        - fetchNextUserPage:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/users
+              query:
+                page: ${ $context.nextPage }
+                limit: 100
+              output: pageResult
+        - processPage:
+            set:
+              allUsers: ${ $context.allUsers + .pageResult.users }
+              nextPage: ${ $context.nextPage + 1 }
+              hasMorePages: ${ .pageResult.hasMore }
+            export:
+              as: '$context + { allUsers: $context.allUsers + .pageResult.users, nextPage: $context.nextPage + 1, hasMorePages: .pageResult.hasMore }'
+
+  - processFinalResult:
+      set:
+        result:
+          totalUsers: ${ length($context.allUsers) }
+          users: ${ $context.allUsers }
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always handle errors">
+    Wrap HTTP calls in `try`/`catch` blocks. See [Error Handling](/examples/error-handling) for details.
+  </Accordion>
+  
+  <Accordion title="Set timeouts">
+    Add `timeout` to prevent hanging on unresponsive endpoints:
+    ```yaml
+    call: http
+    with:
+      method: get
+      endpoint: https://api.example.com/data
+      timeout:
+        seconds: 30
+    ```
+  </Accordion>
+  
+  <Accordion title="Use secrets for credentials">
+    Never hardcode API keys or passwords. Use `$secrets` to reference secure configuration.
+  </Accordion>
+  
+  <Accordion title="Validate input and output">
+    Define input schemas to validate data before making API calls.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Error Handling" icon="shield-halved" href="/examples/error-handling">
+    Add retry logic and error recovery
+  </Card>
+  <Card title="OpenAPI Integration" icon="book" href="/api-reference/openapi">
+    Use OpenAPI specs for type-safe calls
+  </Card>
+</CardGroup>

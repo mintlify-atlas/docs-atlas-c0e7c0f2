@@ -1,0 +1,443 @@
+---
+title: Event Listeners
+description: Build event-driven workflows with listen tasks
+icon: signal
+---
+
+Event-driven workflows react to external events, enabling asynchronous, loosely-coupled architectures. Lemline's `listen` construct allows workflows to wait for specific events before continuing.
+
+## Basic Event Listening
+
+Wait for a single event:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: listen-to-one-event
+  version: '0.1.0'
+do:
+  - waitForEvent:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.order.created
+```
+
+The workflow pauses at this task until an event with type `com.example.order.created` is received.
+
+## Event Correlation
+
+Filter events by correlation ID:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: listen-with-correlation
+  version: '0.1.0'
+do:
+  - startProcess:
+      set:
+        processId: ${ uuidv4() }
+      export:
+        as: '$context + { processId: ${ uuidv4() } }'
+
+  - waitForCompletion:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.process.completed
+              correlationId: ${ $context.processId }
+        for:
+          minutes: 30
+      output:
+        as: completionEvent
+```
+
+<Tip>
+Correlation ensures you receive the event related to **your specific workflow instance**, not events from other instances.
+</Tip>
+
+## Timeouts
+
+Set a timeout for event listening:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: listen-with-timeout
+  version: '0.1.0'
+do:
+  - waitForEvent:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.order.created
+        for:
+          seconds: 30
+      output:
+        as: orderEvent
+```
+
+If no matching event arrives within 30 seconds, the task fails with a timeout error.
+
+## Handling Timeout Errors
+
+Catch timeout errors and take action:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: listen-timeout-handling
+  version: '0.1.0'
+do:
+  - waitForApproval:
+      try:
+        - listenForApproval:
+            listen:
+              to:
+                one:
+                  with:
+                    type: com.example.approval.received
+                    correlationId: ${ .requestId }
+              for:
+                hours: 24
+            output:
+              as: approval
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/timeout
+        as: timeoutError
+        do:
+          - handleTimeout:
+              call: http
+              with:
+                method: post
+                endpoint: https://notifications.example.com/api/send
+                body:
+                  message: "Approval request timed out after 24 hours"
+                  requestId: ${ .requestId }
+```
+
+## Listening to Any of Multiple Events
+
+Wait for the first of several event types:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: listen-to-any
+  version: '0.1.0'
+do:
+  - waitForAnyEvent:
+      listen:
+        to:
+          any:
+            - with:
+                type: com.example.order.created
+            - with:
+                type: com.example.order.cancelled
+        for:
+          minutes: 10
+      output:
+        as: receivedEvent
+
+  - processEvent:
+      switch:
+        - orderCreated:
+            when: ${ .receivedEvent.type == "com.example.order.created" }
+            then:
+              do:
+                - handleCreated:
+                    set:
+                      status: "processing"
+        - orderCancelled:
+            when: ${ .receivedEvent.type == "com.example.order.cancelled" }
+            then:
+              do:
+                - handleCancelled:
+                    set:
+                      status: "cancelled"
+```
+
+## Listening to All of Multiple Events
+
+Wait for all specified events:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: listen-to-all
+  version: '0.1.0'
+do:
+  - waitForAllApprovals:
+      listen:
+        to:
+          all:
+            - with:
+                type: com.example.approval.manager
+                correlationId: ${ .requestId }
+            - with:
+                type: com.example.approval.finance
+                correlationId: ${ .requestId }
+            - with:
+                type: com.example.approval.legal
+                correlationId: ${ .requestId }
+        for:
+          days: 7
+      output:
+        as: allApprovals
+
+  - processApprovals:
+      set:
+        approved: true
+        approvalDetails:
+          manager: ${ .allApprovals[0] }
+          finance: ${ .allApprovals[1] }
+          legal: ${ .allApprovals[2] }
+```
+
+<Note>
+The workflow waits until **all three** approval events are received or the timeout expires.
+</Note>
+
+## Real-World Example: Order Fulfillment
+
+This workflow processes an order and waits for shipping confirmation:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-fulfillment
+  version: '1.0.0'
+do:
+  - validateOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/validate
+        body: ${ .order }
+        output: validatedOrder
+
+  - reserveInventory:
+      call: http
+      with:
+        method: post
+        endpoint: https://inventory.example.com/api/reserve
+        body: ${ .validatedOrder.items }
+        output: reservation
+
+  - processPayment:
+      call: http
+      with:
+        method: post
+        endpoint: https://payments.example.com/api/charge
+        body:
+          orderId: ${ .validatedOrder.id }
+          amount: ${ .validatedOrder.total }
+        output: payment
+
+  - scheduleShipment:
+      call: http
+      with:
+        method: post
+        endpoint: https://shipping.example.com/api/schedule
+        body:
+          orderId: ${ .validatedOrder.id }
+          items: ${ .reservation.items }
+          address: ${ .order.shippingAddress }
+        output: shipment
+
+  - waitForShipping:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.shipping.order.shipped
+              correlationId: ${ .validatedOrder.id }
+        for:
+          days: 7
+      output:
+        as: shippingUpdate
+
+  - completeOrder:
+      call: http
+      with:
+        method: put
+        endpoint: https://orders.example.com/api/orders/${.validatedOrder.id}
+        body:
+          status: "shipped"
+          trackingNumber: ${ .shippingUpdate.trackingNumber }
+          estimatedDelivery: ${ .shippingUpdate.estimatedDelivery }
+```
+
+**Flow:**
+1. Validate order, reserve inventory, process payment
+2. Schedule shipment with shipping service
+3. **Wait up to 7 days** for a shipping event
+4. Complete the order with tracking information
+
+## Event-Driven Workflow Initiation
+
+Workflows can be triggered by events:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: event-triggered-workflow
+  version: '0.1.0'
+schedule:
+  on:
+    one:
+      with:
+        type: com.example.new.customer
+do:
+  - initialize:
+      set:
+        customer: ${ $workflow.input[0] }
+
+  - createAccount:
+      call: http
+      with:
+        method: post
+        endpoint: https://accounts.example.com/api/create
+        body:
+          email: ${ .customer.email }
+          name: ${ .customer.name }
+
+  - sendWelcomeEmail:
+      call: http
+      with:
+        method: post
+        endpoint: https://notifications.example.com/api/send
+        body:
+          to: ${ .customer.email }
+          template: "welcome"
+```
+
+This workflow automatically starts when a `com.example.new.customer` event is published.
+
+## Iterating Over Events
+
+Process a collection of events in a loop:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: process-checkups
+  version: '0.1.0'
+do:
+  - checkup:
+      for:
+        each: pet
+        in: .pets
+        at: childIndex
+      while: .vet != null
+      do:
+        - waitForCheckup:
+            listen:
+              to:
+                one:
+                  with:
+                    type: com.fake.petclinic.pets.checkup.completed.v2
+                    correlationId: ${ $pet.id }
+            output:
+              as: checkupResult
+```
+
+This workflow waits for a checkup completion event for each pet in the collection.
+
+## Event Filtering
+
+Filter events based on payload content:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: filtered-events
+  version: '0.1.0'
+do:
+  - waitForHighPriorityOrder:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.order.created
+        filter: '${ .priority == "high" and .amount > 1000 }'
+        for:
+          hours: 1
+      output:
+        as: highPriorityOrder
+```
+
+Only events matching the filter expression are consumed.
+
+## CloudEvents Standard
+
+Lemline uses the CloudEvents specification for event metadata:
+
+```json
+{
+  "specversion": "1.0",
+  "type": "com.example.order.created",
+  "source": "https://orders.example.com",
+  "id": "A234-1234-1234",
+  "time": "2026-02-28T12:00:00Z",
+  "datacontenttype": "application/json",
+  "data": {
+    "orderId": "12345",
+    "customerId": "67890",
+    "total": 99.99
+  }
+}
+```
+
+- **type**: Event type (required)
+- **source**: Event origin (required)
+- **id**: Unique event ID (required)
+- **correlationId**: Links events to workflow instances (optional, in extensions)
+- **data**: Event payload
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Always set timeouts" icon="clock">
+    Prevent workflows from waiting indefinitely. Choose realistic timeouts based on your SLAs.
+  </Card>
+  
+  <Card title="Use correlation IDs" icon="link">
+    Always correlate events to specific workflow instances using unique identifiers.
+  </Card>
+  
+  <Card title="Handle timeouts gracefully" icon="shield-halved">
+    Wrap listen tasks in try-catch blocks to handle timeout errors appropriately.
+  </Card>
+  
+  <Card title="Document event contracts" icon="book">
+    Clearly define event types, sources, and payload schemas for your organization.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Parallel Execution" icon="code-branch" href="/examples/parallel-execution">
+    Combine events with parallel tasks
+  </Card>
+  <Card title="Error Handling" icon="shield-halved" href="/examples/error-handling">
+    Handle event timeout errors
+  </Card>
+</CardGroup>

@@ -1,0 +1,509 @@
+---
+title: Raise Task
+description: Explicitly raise errors in workflows
+---
+
+The Raise task explicitly signals an error condition, interrupting normal flow and triggering error handling mechanisms.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: validation-error
+  version: '1.0.0'
+use:
+  errors:
+    invalidInput:
+      type: https://example.com/errors/validation
+      title: Invalid Input
+      status: 400
+do:
+  - validateInput:
+      if: "${ .value < 0 }"
+      raise:
+        error: invalidInput
+  
+  - processValue:
+      # Only executes if value >= 0
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/process
+        body:
+          value: "${ .value }"
+```
+
+## Defining Errors
+
+### Reusable Error Definitions
+
+```yaml
+use:
+  errors:
+    outOfStock:
+      type: https://example.com/errors/inventory/out-of-stock
+      title: Out of Stock
+      status: 409
+    
+    paymentDeclined:
+      type: https://example.com/errors/payment/declined
+      title: Payment Declined
+      status: 402
+    
+    unauthorized:
+      type: https://example.com/errors/auth/unauthorized
+      title: Unauthorized Access
+      status: 403
+
+do:
+  - checkStock:
+      if: "${ .stock < .quantity }"
+      raise:
+        error: outOfStock
+```
+
+### Inline Error Definition
+
+```yaml
+do:
+  - validateEmail:
+      if: "${ .email | test('^[^@]+@[^@]+\\.[^@]+$') | not }"
+      raise:
+        error:
+          type: https://example.com/errors/validation/invalid-email
+          title: Invalid Email Address
+          status: 400
+          detail: "The email address '${ .email }' is not valid"
+```
+
+## Complete Examples
+
+### Business Rule Validation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-validation
+  version: '1.0.0'
+use:
+  errors:
+    insufficientStock:
+      type: https://example.com/errors/order/insufficient-stock
+      title: Insufficient Stock
+      status: 409
+    
+    invalidQuantity:
+      type: https://example.com/errors/order/invalid-quantity
+      title: Invalid Quantity
+      status: 400
+    
+    minimumNotMet:
+      type: https://example.com/errors/order/minimum-not-met
+      title: Minimum Order Not Met
+      status: 400
+
+do:
+  - validateQuantity:
+      if: "${ .order.quantity <= 0 }"
+      raise:
+        error: invalidQuantity
+  
+  - checkStock:
+      call: http
+      with:
+        method: post
+        endpoint: https://inventory.example.com/api/check
+        body:
+          items: "${ .order.items }"
+  
+  - validateStock:
+      if: "${ .body.available < .order.quantity }"
+      raise:
+        error: insufficientStock
+  
+  - calculateTotal:
+      set:
+        total: "${ .order.items | map(.price * .quantity) | add }"
+  
+  - checkMinimum:
+      if: "${ .total < 10.00 }"
+      raise:
+        error: minimumNotMet
+  
+  - processOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/create
+        body: "${ .order }"
+```
+
+### Custom Error with Dynamic Details
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: dynamic-error-details
+  version: '1.0.0'
+do:
+  - checkInventory:
+      call: http
+      with:
+        method: get
+        endpoint: https://inventory.example.com/api/stock/{itemId}
+  
+  - validateAvailability:
+      if: "${ .body.available < .requestedQuantity }"
+      raise:
+        error:
+          type: https://example.com/errors/inventory/insufficient
+          title: Insufficient Inventory
+          status: 409
+          detail: "Requested ${ .requestedQuantity } units, but only ${ .body.available } available"
+          instance: "${ $task.reference }"
+          metadata:
+            itemId: "${ .itemId }"
+            requested: "${ .requestedQuantity }"
+            available: "${ .body.available }"
+            warehouseId: "${ .body.warehouseId }"
+```
+
+### Error Handling with Raise
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: raise-and-catch
+  version: '1.0.0'
+use:
+  errors:
+    processingFailed:
+      type: https://example.com/errors/processing-failed
+      title: Processing Failed
+      status: 500
+
+do:
+  - processWithErrorHandling:
+      try:
+        - validateInput:
+            if: "${ .data == null or length(.data) == 0 }"
+            raise:
+              error:
+                type: https://example.com/errors/validation
+                title: Empty Data
+                status: 400
+                detail: Data cannot be empty
+        
+        - processData:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/process
+              body: "${ .data }"
+        
+        - validateResult:
+            if: "${ .body.success == false }"
+            raise:
+              error: processingFailed
+      
+      catch:
+        - errors:
+            with:
+              type: https://example.com/errors/validation
+          as: validationError
+          do:
+            - handleValidation:
+                set:
+                  result:
+                    success: false
+                    reason: validation
+                    error: "${ $validationError.detail }"
+        
+        - errors:
+            with:
+              type: https://example.com/errors/processing-failed
+          as: processingError
+          do:
+            - handleProcessing:
+                set:
+                  result:
+                    success: false
+                    reason: processing
+                    error: "${ $processingError.title }"
+```
+
+### Authorization Checks
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: authorization-check
+  version: '1.0.0'
+use:
+  errors:
+    unauthorized:
+      type: https://example.com/errors/auth/unauthorized
+      title: Unauthorized
+      status: 401
+    
+    forbidden:
+      type: https://example.com/errors/auth/forbidden
+      title: Forbidden
+      status: 403
+
+do:
+  - checkAuthentication:
+      if: "${ .user == null or .user.token == null }"
+      raise:
+        error: unauthorized
+  
+  - checkPermissions:
+      call: http
+      with:
+        method: post
+        endpoint: https://auth.example.com/api/check-permissions
+        body:
+          userId: "${ .user.id }"
+          action: "${ .requestedAction }"
+          resource: "${ .resourceId }"
+  
+  - validatePermissions:
+      if: "${ .body.allowed == false }"
+      raise:
+        error: forbidden
+  
+  - performAction:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/actions
+        body:
+          action: "${ .requestedAction }"
+          resource: "${ .resourceId }"
+```
+
+### State Machine Violations
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: state-validation
+  version: '1.0.0'
+use:
+  errors:
+    invalidStateTransition:
+      type: https://example.com/errors/state/invalid-transition
+      title: Invalid State Transition
+      status: 400
+
+do:
+  - getOrder:
+      call: http
+      with:
+        method: get
+        endpoint: https://orders.example.com/api/orders/{orderId}
+  
+  - validateTransition:
+      switch:
+        - validCancellation:
+            when: "${ .requestedAction == 'cancel' and (.body.status == 'pending' or .body.status == 'confirmed') }"
+            then: performAction
+        
+        - validShipment:
+            when: "${ .requestedAction == 'ship' and .body.status == 'confirmed' }"
+            then: performAction
+        
+        - validCompletion:
+            when: "${ .requestedAction == 'complete' and .body.status == 'shipped' }"
+            then: performAction
+        
+        - invalid:
+            then: raiseError
+  
+  - raiseError:
+      raise:
+        error:
+          type: https://example.com/errors/state/invalid-transition
+          title: Invalid State Transition
+          status: 400
+          detail: "Cannot transition from '${ .body.status }' to '${ .requestedAction }'"
+          metadata:
+            currentState: "${ .body.status }"
+            requestedAction: "${ .requestedAction }"
+            orderId: "${ .orderId }"
+      then: end
+  
+  - performAction:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/orders/{orderId}/actions
+        body:
+          action: "${ .requestedAction }"
+```
+
+## Error Structure
+
+Errors follow the Problem Details (RFC 7807) format:
+
+```yaml
+error:
+  type: https://example.com/errors/specific-error  # Required: URI identifying error type
+  title: Human Readable Title                      # Required: Short description
+  status: 400                                       # Optional: HTTP status code
+  detail: Detailed explanation                     # Optional: Specific details
+  instance: /workflow/tasks/validateData           # Optional: URI identifying occurrence
+  metadata:                                         # Optional: Additional data
+    field: value
+```
+
+## Configuration
+
+### error (required)
+
+Error to raise - either a reference or inline definition:
+
+```yaml
+# Reference to defined error
+raise:
+  error: errorName
+
+# Inline error definition
+raise:
+  error:
+    type: https://example.com/errors/custom
+    title: Error Title
+    status: 400
+    detail: Error details
+```
+
+## Best Practices
+
+1. **Define reusable errors** - Create error definitions in `use.errors`
+2. **Use meaningful types** - Error types should be URIs identifying the error
+3. **Include helpful details** - Provide context in the `detail` field
+4. **Set appropriate status codes** - Use standard HTTP status codes
+5. **Add metadata** - Include relevant data for debugging
+6. **Document error conditions** - Clearly document when errors are raised
+7. **Handle raised errors** - Wrap Raise tasks in Try/Catch for graceful handling
+
+## Common Patterns
+
+### Guard Clauses
+
+```yaml
+# Validate preconditions
+- checkPrecondition1:
+    if: "${ .condition1 == false }"
+    raise:
+      error: preconditionFailed
+
+- checkPrecondition2:
+    if: "${ .condition2 == false }"
+    raise:
+      error: preconditionFailed
+
+- processData:
+    # Only reached if all preconditions pass
+    call: http
+    # ...
+```
+
+### Early Exit
+
+```yaml
+- checkCriticalCondition:
+    if: "${ .critical == false }"
+    raise:
+      error: criticalConditionNotMet
+    # Workflow ends here if condition not met
+
+- continueProcessing:
+    # Only if critical condition met
+    call: http
+    # ...
+```
+
+### Validation Chain
+
+```yaml
+- validateField1:
+    if: "${ .field1 == null }"
+    raise:
+      error: missingField1
+
+- validateField2:
+    if: "${ .field2 == null }"
+    raise:
+      error: missingField2
+
+- validateField3:
+    if: "${ .field3 == null }"
+    raise:
+      error: missingField3
+```
+
+## Data Flow
+
+Raise tasks don't produce output - they interrupt flow:
+
+```yaml
+- prepareData:
+    set:
+      value: "${ .input }"
+
+- checkValue:
+    if: "${ .value < 0 }"
+    raise:
+      error: negativeValue
+    # No output - workflow ends here if raised
+
+- processValue:
+    # Only reached if error not raised
+    # Input is still from prepareData
+    call: http
+    # ...
+```
+
+## Error Propagation
+
+Raised errors propagate up to enclosing Try/Catch:
+
+```yaml
+try:
+  - outerTask:
+      do:
+        - innerTask:
+            try:
+              - validate:
+                  if: "${ .invalid }"
+                  raise:
+                    error: validationError
+            catch:
+              # This catches the raised error
+              errors:
+                with:
+                  type: https://example.com/errors/validation
+              do:
+                - handleValidation:
+                    # ...
+catch:
+  # This won't catch the error (already handled by inner catch)
+  errors:
+    with:
+      type: https://example.com/errors/validation
+```
+
+## Related Topics
+
+- [Try/Catch](/tasks/try-catch) - Handle raised errors
+- [Switch Task](/tasks/switch) - Conditional logic before raising
+- [Set Task](/tasks/set) - Prepare error details
+- [Error Handling](../reference/error-handling) - Error handling concepts

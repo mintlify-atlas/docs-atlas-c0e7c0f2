@@ -1,0 +1,670 @@
+---
+title: Installation
+description: Install Lemline using JVM, native binary, or Docker
+icon: download
+---
+
+Lemline can be installed and run in several ways depending on your deployment environment and requirements. This guide covers all installation methods.
+
+## Installation Methods
+
+<CardGroup cols={3}>
+  <Card title="JVM (Recommended for Development)" icon="java">
+    Run as a standard Java application with hot reload support
+  </Card>
+  
+  <Card title="Native Binary" icon="microchip">
+    Lightweight binary with fast startup and low memory footprint
+  </Card>
+  
+  <Card title="Docker" icon="docker">
+    Containerized deployment for Kubernetes and cloud platforms
+  </Card>
+</CardGroup>
+
+## Prerequisites
+
+Before installing Lemline, ensure you have:
+
+<Tabs>
+  <Tab title="JVM">
+    - **Java 17 or later**
+    - **Gradle 8.x** (included via wrapper)
+    - Access to a supported database (PostgreSQL or MySQL)
+    - Access to a supported message broker (Kafka, RabbitMQ, or PGMQ)
+  </Tab>
+  
+  <Tab title="Native Binary">
+    - **GraalVM 24.1.2.r23-mandrel** (for building from source)
+    - Access to a supported database (PostgreSQL or MySQL)
+    - Access to a supported message broker (Kafka, RabbitMQ, or PGMQ)
+  </Tab>
+  
+  <Tab title="Docker">
+    - **Docker 20.10+** or **Docker Desktop**
+    - **Docker Compose** (for local development)
+    - Access to a supported database and message broker (can run via Docker)
+  </Tab>
+</Tabs>
+
+## JVM Installation
+
+The JVM installation is ideal for development and testing.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/lemline/lemline.git
+    cd lemline
+    ```
+  </Step>
+  
+  <Step title="Build the application">
+    ```bash
+    ./gradlew :lemline-runner:build
+    ```
+    
+    This creates a runnable JAR in `lemline-runner/build/quarkus-app/quarkus-run.jar`.
+  </Step>
+  
+  <Step title="Create a configuration file">
+    Create `application.yaml` with your database and messaging settings:
+    
+    ```yaml application.yaml
+    lemline:
+      database:
+        postgresql:
+          host: localhost
+          port: 5432
+          database: lemline
+          username: postgres
+          password: ${LEMLINE_DB_PASSWORD:postgres}
+      
+      messaging:
+        kafka:
+          brokers: localhost:9092
+    ```
+    
+    <Info>
+    Use environment variables for sensitive values like passwords. See the [Configuration](/configuration/overview) guide for all options.
+    </Info>
+  </Step>
+  
+  <Step title="Run the application">
+    ```bash
+    # With default configuration (application.yaml in current directory)
+    java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+    
+    # With custom configuration location
+    QUARKUS_CONFIG_LOCATIONS=/path/to/application.yaml \
+      java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+    
+    # With environment variable overrides
+    LEMLINE_DB_PASSWORD=secret \
+      java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+    ```
+  </Step>
+</Steps>
+
+### Development Mode
+
+For active development with hot reload:
+
+```bash
+./gradlew :lemline-runner:quarkusDev
+```
+
+This enables:
+- **Live reload** - Code changes take effect immediately
+- **Dev UI** - Access at `http://localhost:8080/q/dev`
+- **Continuous testing** - Press `r` in the terminal to run tests
+
+<Tip>
+Development mode automatically connects to local infrastructure defined in `examples/docker-compose.yml`.
+</Tip>
+
+## Native Binary Installation
+
+Native binaries offer significant performance benefits:
+
+- **Fast startup** - Milliseconds instead of seconds
+- **Low memory** - Reduced memory footprint
+- **No JVM required** - Self-contained executable
+
+### Building Native Binary
+
+<Steps>
+  <Step title="Install GraalVM">
+    Install GraalVM 24.1.2.r23-mandrel:
+    
+    ```bash
+    # Using SDKMAN (recommended)
+    sdk install java 24.1.2.r23-mandrel
+    sdk use java 24.1.2.r23-mandrel
+    
+    # Verify installation
+    java -version
+    ```
+  </Step>
+  
+  <Step title="Build for your platform">
+    <Tabs>
+      <Tab title="Linux">
+        ```bash
+        # On Linux
+        ./gradlew :lemline-runner:assemble \
+          -Dquarkus.native.enabled=true \
+          -Dquarkus.package.jar.enabled=false
+        
+        # On macOS (cross-compile for Linux)
+        ./gradlew :lemline-runner:assemble \
+          -Dquarkus.native.enabled=true \
+          -Dquarkus.package.jar.enabled=false \
+          -Dquarkus.native.container-build=true
+        ```
+        
+        Binary location: `lemline-runner/build/lemline-runner-*-runner`
+      </Tab>
+      
+      <Tab title="macOS">
+        ```bash
+        ./gradlew clean :lemline-runner:assemble \
+          -Dquarkus.native.enabled=true \
+          -Dquarkus.package.jar.enabled=false
+        ```
+        
+        Binary location: `lemline-runner/build/lemline-runner-*-runner`
+      </Tab>
+      
+      <Tab title="Windows">
+        ```powershell
+        gradlew.bat :lemline-runner:quarkusBuild `
+          -Dquarkus.native.enabled=true `
+          -Dquarkus.package.jar.enabled=false
+        ```
+        
+        Binary location: `lemline-runner\build\lemline-runner-*-runner.exe`
+      </Tab>
+    </Tabs>
+  </Step>
+  
+  <Step title="Run the native binary">
+    ```bash
+    # Linux/macOS
+    QUARKUS_CONFIG_LOCATIONS=application.yaml \
+      ./lemline-runner/build/lemline-runner-*-runner listen
+    
+    # Windows
+    set QUARKUS_CONFIG_LOCATIONS=application.yaml
+    lemline-runner\build\lemline-runner-*-runner.exe listen
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Native binary builds can take 5-10 minutes depending on your hardware. Ensure you have at least 8GB of RAM available.
+</Warning>
+
+### Performance Comparison
+
+| Metric | JVM | Native Binary |
+|--------|-----|---------------|
+| Startup Time | 3-5 seconds | 50-100 milliseconds |
+| Memory (RSS) | 200-300 MB | 50-100 MB |
+| Distribution Size | 15-20 MB | 80-120 MB |
+
+## Docker Installation
+
+Docker provides a consistent deployment experience across environments.
+
+### Using Pre-built Images
+
+<Info>
+Pre-built Docker images will be available on Docker Hub once Lemline reaches stable release.
+</Info>
+
+### Building Your Own Image
+
+<Steps>
+  <Step title="Build the Docker image">
+    ```bash
+    # JVM-based image
+    docker build -f src/main/docker/Dockerfile.jvm \
+      -t lemline:jvm .
+    
+    # Native binary image (smaller, faster)
+    docker build -f src/main/docker/Dockerfile.native \
+      -t lemline:native .
+    ```
+  </Step>
+  
+  <Step title="Run with Docker">
+    ```bash
+    docker run -d \
+      --name lemline-worker \
+      -e QUARKUS_CONFIG_LOCATIONS=/config/application.yaml \
+      -v $(pwd)/application.yaml:/config/application.yaml \
+      -p 9090:9090 \
+      lemline:jvm listen
+    ```
+  </Step>
+</Steps>
+
+### Docker Compose
+
+For local development with all dependencies:
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: lemline
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+  
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+  
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  
+  lemline:
+    image: lemline:jvm
+    command: listen
+    environment:
+      QUARKUS_CONFIG_LOCATIONS: /config/application.yaml
+    volumes:
+      - ./application.yaml:/config/application.yaml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - postgres
+      - kafka
+
+volumes:
+  postgres-data:
+```
+
+```bash
+# Start everything
+docker compose up -d
+
+# View logs
+docker compose logs -f lemline
+
+# Stop everything
+docker compose down
+```
+
+## Kubernetes Deployment
+
+For production Kubernetes deployments:
+
+<CodeGroup>
+```yaml deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lemline-worker
+  labels:
+    app: lemline
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: lemline
+  template:
+    metadata:
+      labels:
+        app: lemline
+    spec:
+      containers:
+      - name: lemline
+        image: lemline:native
+        args: ["listen"]
+        env:
+        - name: LEMLINE_DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: lemline-config
+              key: db.host
+        - name: LEMLINE_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: lemline-secrets
+              key: db.password
+        - name: LEMLINE_KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: lemline-config
+              key: kafka.brokers
+        ports:
+        - name: metrics
+          containerPort: 9090
+        livenessProbe:
+          httpGet:
+            path: /q/health/live
+            port: 9090
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /q/health/ready
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+```
+
+```yaml configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lemline-config
+data:
+  db.host: "postgresql.default.svc.cluster.local"
+  db.port: "5432"
+  db.database: "lemline"
+  db.username: "lemline"
+  kafka.brokers: "kafka.default.svc.cluster.local:9092"
+```
+
+```yaml secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lemline-secrets
+type: Opaque
+stringData:
+  db.password: "your-secure-password"
+```
+
+```yaml service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: lemline-metrics
+spec:
+  selector:
+    app: lemline
+  ports:
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
+```
+</CodeGroup>
+
+Deploy to Kubernetes:
+
+```bash
+kubectl apply -f configmap.yaml
+kubectl apply -f secret.yaml
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+
+# Verify deployment
+kubectl get pods -l app=lemline
+kubectl logs -l app=lemline --tail=100
+```
+
+<Tip>
+Use horizontal pod autoscaling to automatically scale based on CPU or custom metrics:
+```bash
+kubectl autoscale deployment lemline-worker --cpu-percent=70 --min=3 --max=10
+```
+</Tip>
+
+## CLI Commands Reference
+
+Once installed, Lemline provides several CLI commands:
+
+<CardGroup cols={2}>
+  <Card title="listen" icon="ear-listen">
+    Start the Lemline worker to listen for and process workflows
+    ```bash
+    lemline-runner listen [--metrics-port 9090]
+    ```
+  </Card>
+  
+  <Card title="config" icon="gear">
+    Display current configuration
+    ```bash
+    lemline-runner config [--format yaml] [--all]
+    ```
+  </Card>
+  
+  <Card title="definition" icon="file-code">
+    Manage workflow definitions
+    ```bash
+    lemline-runner definition create --file workflow.yaml
+    lemline-runner definition list
+    lemline-runner definition get --id <id>
+    ```
+  </Card>
+  
+  <Card title="instance" icon="play">
+    Manage workflow instances
+    ```bash
+    lemline-runner instance start --namespace ns --name wf --version 1.0.0
+    lemline-runner instance get --id <id>
+    lemline-runner instance list
+    ```
+  </Card>
+  
+  <Card title="migrate" icon="database">
+    Run database migrations manually
+    ```bash
+    lemline-runner migrate
+    ```
+  </Card>
+</CardGroup>
+
+See the [CLI Reference](/cli/overview) for complete command documentation.
+
+## Configuration Files
+
+Lemline looks for configuration files in this order:
+
+1. Location specified by `QUARKUS_CONFIG_LOCATIONS` environment variable
+2. `application.yaml` in the current directory
+3. `application.yaml` in the JAR/binary directory
+4. Default embedded configuration
+
+<Tabs>
+  <Tab title="Minimal Configuration">
+    ```yaml
+    lemline:
+      database:
+        postgresql:
+          host: localhost
+          port: 5432
+          database: lemline
+          username: postgres
+          password: postgres
+      
+      messaging:
+        kafka:
+          brokers: localhost:9092
+    ```
+  </Tab>
+  
+  <Tab title="Production Configuration">
+    ```yaml
+    lemline:
+      database:
+        postgresql:
+          host: ${LEMLINE_DB_HOST:localhost}
+          port: ${LEMLINE_DB_PORT:5432}
+          database: ${LEMLINE_DB_NAME:lemline}
+          username: ${LEMLINE_DB_USER:postgres}
+          password: ${LEMLINE_DB_PASSWORD}
+        migrate-at-start: true
+        baseline-on-migrate: true
+      
+      messaging:
+        kafka:
+          brokers: ${LEMLINE_KAFKA_BROKERS}
+          security-protocol: ${LEMLINE_KAFKA_SECURITY:SASL_SSL}
+          sasl-mechanism: ${LEMLINE_KAFKA_SASL:PLAIN}
+          sasl-username: ${LEMLINE_KAFKA_USER}
+          sasl-password: ${LEMLINE_KAFKA_PASSWORD}
+          workflows:
+            topic: ${LEMLINE_WORKFLOWS_TOPIC:lemline-commands}
+            consumer:
+              concurrency: ${LEMLINE_WORKFLOWS_CONCURRENCY:10}
+              group-id: ${LEMLINE_WORKFLOWS_GROUP:lemline-commands-g1}
+          events:
+            topic: ${LEMLINE_EVENTS_TOPIC:lemline-events}
+            consumer:
+              concurrency: ${LEMLINE_EVENTS_CONCURRENCY:5}
+      
+      analytics:
+        migrate-at-start: true
+        postgresql:
+          host: ${LEMLINE_ANALYTICS_HOST}
+          database: ${LEMLINE_ANALYTICS_DB:lemline_analytics}
+          username: ${LEMLINE_ANALYTICS_USER}
+          password: ${LEMLINE_ANALYTICS_PASSWORD}
+    
+    quarkus:
+      log:
+        level: INFO
+        category:
+          "com.lemline":
+            level: INFO
+    ```
+  </Tab>
+</Tabs>
+
+## Verifying Installation
+
+After installation, verify everything is working:
+
+<Steps>
+  <Step title="Check version">
+    ```bash
+    lemline-runner --version
+    ```
+  </Step>
+  
+  <Step title="Verify configuration">
+    ```bash
+    lemline-runner config
+    ```
+  </Step>
+  
+  <Step title="Test database connection">
+    ```bash
+    lemline-runner migrate
+    ```
+    
+    This applies database migrations and verifies connectivity.
+  </Step>
+  
+  <Step title="Start the worker">
+    ```bash
+    lemline-runner listen --info
+    ```
+    
+    Watch for successful startup messages:
+    - Database connection established
+    - Message broker connection established
+    - Listening for workflows
+  </Step>
+  
+  <Step title="Check health endpoints">
+    ```bash
+    curl http://localhost:9090/q/health/live
+    curl http://localhost:9090/q/health/ready
+    curl http://localhost:9090/q/metrics
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Database connection refused">
+    **Problem:** `Connection refused` or `could not connect to server`
+    
+    **Solutions:**
+    - Verify database is running: `docker compose ps` or `pg_isready -h localhost`
+    - Check database credentials in your configuration
+    - Ensure firewall allows connection on database port
+    - Verify network connectivity between Lemline and database
+  </Accordion>
+  
+  <Accordion title="Kafka connection timeout">
+    **Problem:** `TimeoutException` or `Failed to connect to Kafka`
+    
+    **Solutions:**
+    - Verify Kafka is running and accessible
+    - Check `brokers` configuration matches Kafka's advertised listeners
+    - For Docker: Ensure Kafka is configured with correct `KAFKA_ADVERTISED_LISTENERS`
+    - Check network connectivity and DNS resolution
+  </Accordion>
+  
+  <Accordion title="Native binary build fails">
+    **Problem:** `Error: Image build request failed with exit status 137`
+    
+    **Solutions:**
+    - Increase Docker memory to at least 8GB (Docker Desktop > Settings > Resources)
+    - Close other applications to free up memory
+    - Use `./gradlew clean` before building
+    - Consider building JVM version instead if resources are limited
+  </Accordion>
+  
+  <Accordion title="Port already in use">
+    **Problem:** `Address already in use: bind`
+    
+    **Solutions:**
+    - Change metrics port: `lemline-runner listen --metrics-port 9091`
+    - Find and stop conflicting process: `lsof -i :9090` (Linux/macOS) or `netstat -ano | findstr :9090` (Windows)
+    - Update configuration to use different port
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="bolt" href="/quickstart">
+    Run your first workflow and understand the basics
+  </Card>
+  
+  <Card title="Configuration Guide" icon="gear" href="/configuration/overview">
+    Deep dive into database, messaging, and service configuration
+  </Card>
+  
+  <Card title="Deployment Guide" icon="rocket" href="/deployment/overview">
+    Learn about production deployment patterns and best practices
+  </Card>
+  
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Complete reference for all CLI commands and options
+  </Card>
+</CardGroup>

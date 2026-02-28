@@ -1,0 +1,300 @@
+---
+title: Observability
+description: Metrics, health checks, and logging for production Lemline deployments
+---
+
+## Overview
+
+Lemline provides comprehensive observability through three pillars: metrics (Micrometer/Prometheus), health checks (Quarkus SmallRye Health), and structured logging (SLF4J with MDC context).
+
+## Health Checks
+
+Lemline exposes health check endpoints for container orchestration and load balancers.
+
+### Endpoints
+
+| Endpoint | Purpose | Use Case |
+|----------|---------|----------|
+| `/health` | Overall health | General health status |
+| `/health/live` | Liveness probe | Container restart signal |
+| `/health/ready` | Readiness probe | Load balancer routing |
+
+### Default Configuration
+
+```yaml
+quarkus:
+  smallrye-health:
+    enabled: true
+    root-path: health
+    liveness-path: live
+    readiness-path: ready
+```
+
+Access health checks on the metrics port (default 8080):
+
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/health/live
+curl http://localhost:8080/health/ready
+```
+
+### Health Check Components
+
+**Readiness Checks:**
+- Database connectivity
+- Message broker connectivity
+- Retry service availability
+
+**Liveness Checks:**
+- Message acknowledgment system
+- Fatal error detection
+- Core processing loop
+
+### Kubernetes Integration
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lemline-runner
+spec:
+  containers:
+    - name: lemline
+      image: lemline:latest
+      ports:
+        - containerPort: 8080
+          name: metrics
+      livenessProbe:
+        httpGet:
+          path: /health/live
+          port: 8080
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      readinessProbe:
+        httpGet:
+          path: /health/ready
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 2
+        failureThreshold: 2
+```
+
+## Logging Strategy
+
+Lemline uses SLF4J with contextual logging through MDC (Mapped Diagnostic Context).
+
+### Log Levels
+
+| Level | Purpose | Example Usage |
+|-------|---------|---------------|
+| TRACE | Very detailed debugging | Method entry/exit, variable values |
+| DEBUG | Flow through system | Method execution, decision points |
+| INFO | Runtime events | Workflow started/completed, service startup |
+| WARN | Potentially harmful situations | Caught exceptions, retries |
+| ERROR | Error events | Uncaught exceptions, service failures |
+
+### Log Format
+
+Default console format includes contextual information:
+
+```
+%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%X{workflowNamespace}/%X{workflowName}:%X{workflowVersion}] [%X{workflowId}] [%c{2.}] %s%e%n
+```
+
+Example output:
+```
+2026-02-28 10:15:30.123 INFO [my-namespace/order-workflow:1.0.0] [01HXYZ...] [WorkflowHandler] Processing workflow message
+```
+
+### Contextual Logging
+
+Lemline automatically adds contextual information to log messages:
+
+- `workflowId` - Workflow instance ID
+- `workflowName` - Workflow name
+- `workflowNamespace` - Workflow namespace
+- `workflowVersion` - Workflow version
+- `nodePosition` - Current task position
+- `correlationId` - Request correlation ID
+
+### Configuration
+
+Control log levels via configuration:
+
+```yaml
+quarkus:
+  log:
+    level: WARN
+    console:
+      level: WARN
+      format: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%X{workflowNamespace}/%X{workflowName}:%X{workflowVersion}] [%X{workflowId}] [%c{2.}] %s%e%n"
+    category:
+      "com.lemline":
+        level: INFO
+```
+
+Or via CLI flags:
+
+```bash
+./lemline listen --info         # Set INFO level
+./lemline listen --debug        # Set DEBUG level
+./lemline listen --warn         # Set WARN level
+./lemline listen --error        # Set ERROR level
+```
+
+### JSON Logging for Production
+
+Enable structured JSON logging for log aggregation systems:
+
+```yaml
+quarkus:
+  log:
+    console:
+      json: true
+      json:
+        pretty-print: false
+        date-format: "yyyy-MM-dd HH:mm:ss.SSS"
+        record-delimiter: "\n"
+        exception-output-type: formatted
+        additional-field:
+          app-name:
+            value: lemline
+          env:
+            value: production
+```
+
+JSON output example:
+```json
+{
+  "timestamp": "2026-02-28 10:15:30.123",
+  "level": "INFO",
+  "logger": "com.lemline.runner.messaging.WorkflowCommandHandler",
+  "message": "Processing workflow message",
+  "workflowId": "01HXYZ...",
+  "workflowName": "order-workflow",
+  "workflowNamespace": "my-namespace",
+  "workflowVersion": "1.0.0",
+  "app-name": "lemline",
+  "env": "production"
+}
+```
+
+## Metrics Collection
+
+See [Monitoring Setup](./monitoring) for detailed metrics configuration.
+
+### Key Observability Metrics
+
+**Workflow Execution:**
+- Total workflows started, completed, and failed
+- Execution duration by workflow and version
+- Active instance count
+
+**Task Processing:**
+- Task execution counts by type (call, switch, set, etc.)
+- Task duration histograms
+- Failure counts by error reason
+
+**Infrastructure:**
+- Database connection pool usage
+- Message broker throughput
+- Retry/wait queue depths
+
+**Error Tracking:**
+- Low-cardinality failure reasons for alerting
+- Exception classes and messages
+- Error rates by workflow and task type
+
+## Lifecycle Events Analytics
+
+Lemline can ingest workflow lifecycle events into a dedicated analytics database for long-term analysis.
+
+### Configuration
+
+```yaml
+lemline:
+  analytics:
+    consumer:
+      enabled: true
+      concurrency: 64
+    migrate-at-start: true
+    baseline-on-migrate: false
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline_analytics
+      username: postgres
+      password: ${ANALYTICS_DB_PASSWORD}
+      schema: public
+```
+
+### Behavior
+
+- ACK-after-commit processing (at-least-once delivery)
+- Deduplicated inserts using CloudEvent identity
+- Works with Kafka, RabbitMQ, and PGMQ
+- Separate database from operational storage
+
+### Analytics Schema
+
+The `lemline_lifecycle_events` table stores:
+
+- CloudEvent metadata (id, source, type, time)
+- Workflow identity (namespace, name, version, instance ID)
+- Event type (workflow started, completed, failed, etc.)
+- JSON payload with full event data
+
+## Tracing
+
+Lemline logs include correlation IDs for distributed tracing:
+
+```yaml
+quarkus:
+  log:
+    console:
+      format: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%X{correlationId}] [%X{workflowId}] [%c{2.}] %s%e%n"
+```
+
+Correlation IDs propagate through:
+- Message broker messages
+- HTTP call headers
+- Database transaction logs
+- Lifecycle CloudEvents
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use JSON logging in production">
+    Structured JSON logs integrate better with log aggregation systems like ELK, Splunk, or CloudWatch Logs.
+  </Accordion>
+
+  <Accordion title="Monitor health check endpoints">
+    Configure load balancers and orchestrators to use `/health/ready` for routing decisions and `/health/live` for restart decisions.
+  </Accordion>
+
+  <Accordion title="Set appropriate log levels">
+    Use WARN or ERROR in production. INFO can be verbose. DEBUG and TRACE should only be enabled for troubleshooting.
+  </Accordion>
+
+  <Accordion title="Add environment tags to metrics">
+    Tag metrics with environment, region, and cluster information for better filtering in dashboards.
+  </Accordion>
+
+  <Accordion title="Enable analytics for long-term insights">
+    The analytics database provides historical workflow data without impacting operational database performance.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" href="./monitoring" icon="chart-simple">
+    Set up Prometheus and Grafana dashboards
+  </Card>
+  <Card title="Troubleshooting" href="./troubleshooting" icon="wrench">
+    Diagnose and resolve common issues
+  </Card>
+</CardGroup>

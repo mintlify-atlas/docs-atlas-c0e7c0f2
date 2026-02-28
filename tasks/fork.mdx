@@ -1,0 +1,485 @@
+---
+title: Fork Task
+description: Execute multiple tasks concurrently in parallel
+---
+
+The Fork task enables parallel execution of multiple independent tasks, improving workflow efficiency by running operations concurrently.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: parallel-processing
+  version: '1.0.0'
+do:
+  - processInParallel:
+      fork:
+        branches:
+          - fetchUserData:
+              call: http
+              with:
+                method: get
+                endpoint: https://users.example.com/api/users/{userId}
+          
+          - fetchOrderData:
+              call: http
+              with:
+                method: get
+                endpoint: https://orders.example.com/api/orders/{userId}
+          
+          - fetchPreferences:
+              call: http
+              with:
+                method: get
+                endpoint: https://prefs.example.com/api/preferences/{userId}
+```
+
+## How It Works
+
+### Wait for All Branches (Default)
+
+By default, the Fork task completes when all branches finish:
+
+```yaml
+- parallelCalls:
+    fork:
+      branches:
+        - branch1:
+            call: http
+            # Returns: { "data": "from branch 1" }
+        - branch2:
+            call: http
+            # Returns: { "data": "from branch 2" }
+    # Output is an array: [
+    #   { "data": "from branch 1" },
+    #   { "data": "from branch 2" }
+    # ]
+```
+
+### Compete Mode (First to Complete)
+
+With `compete: true`, the fork completes when the first branch finishes:
+
+```yaml
+- getFastestQuote:
+    fork:
+      compete: true
+      branches:
+        - quoteSourceA:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.source-a.com/quote
+            # Returns: { "provider": "A", "price": 100 }
+        
+        - quoteSourceB:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.source-b.com/quote
+            # Returns: { "provider": "B", "price": 105 }
+    # Output is whichever completed first:
+    # { "provider": "A", "price": 100 }
+```
+
+## Complete Examples
+
+### Parallel Service Calls
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: parallel-data-fetch
+  version: '1.0.0'
+do:
+  - gatherCustomerData:
+      fork:
+        branches:
+          - getProfile:
+              call: http
+              with:
+                method: get
+                endpoint: https://profiles.example.com/api/{customerId}
+              output:
+                as: "${ .body }"
+          
+          - getOrders:
+              call: http
+              with:
+                method: get
+                endpoint: https://orders.example.com/api/customer/{customerId}/orders
+              output:
+                as: "${ .body.orders }"
+          
+          - getPaymentMethods:
+              call: http
+              with:
+                method: get
+                endpoint: https://payments.example.com/api/{customerId}/methods
+              output:
+                as: "${ .body.methods }"
+      output:
+        as: "${ { profile: .[0], orders: .[1], paymentMethods: .[2] } }"
+  
+  - processCustomerData:
+      set:
+        customer:
+          id: "${ .profile.id }"
+          name: "${ .profile.name }"
+          orderCount: "${ length(.orders) }"
+          hasPaymentMethod: "${ length(.paymentMethods) > 0 }"
+```
+
+### Parallel Background Checks
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: finance
+  name: loan-background-checks
+  version: '1.0.0'
+do:
+  - performBackgroundChecks:
+      fork:
+        branches:
+          - creditCheck:
+              try:
+                - runCreditCheck:
+                    call: http
+                    with:
+                      method: post
+                      endpoint: https://credit.example.com/api/check
+                      body:
+                        ssn: "${ .application.ssn }"
+                        name: "${ .application.name }"
+                    output:
+                      as: "${ .body }"
+              catch:
+                errors:
+                  with:
+                    type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+                retry:
+                  delay:
+                    seconds: 5
+                  backoff:
+                    exponential: {}
+                  limit:
+                    attempt:
+                      count: 3
+          
+          - employmentVerification:
+              call: http
+              with:
+                method: post
+                endpoint: https://employment.example.com/api/verify
+                body:
+                  employer: "${ .application.employer }"
+                  applicantName: "${ .application.name }"
+                  income: "${ .application.income }"
+              output:
+                as: "${ .body }"
+          
+          - identityVerification:
+              call: http
+              with:
+                method: post
+                endpoint: https://identity.example.com/api/verify
+                body:
+                  ssn: "${ .application.ssn }"
+                  name: "${ .application.name }"
+                  dateOfBirth: "${ .application.dob }"
+              output:
+                as: "${ .body }"
+      output:
+        as: "${ { credit: .[0], employment: .[1], identity: .[2] } }"
+  
+  - assessResults:
+      set:
+        assessment:
+          creditScore: "${ .credit.score }"
+          employmentVerified: "${ .employment.verified }"
+          identityVerified: "${ .identity.verified }"
+          eligible: "${ .credit.score >= 650 and .employment.verified and .identity.verified }"
+```
+
+### Racing for Fastest Response
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: fastest-response
+  version: '1.0.0'
+do:
+  - getQuickestData:
+      fork:
+        compete: true  # First to complete wins
+        branches:
+          - primaryDataSource:
+              call: http
+              with:
+                method: get
+                endpoint: https://primary.example.com/api/data/{id}
+                timeout:
+                  after: PT5S
+              output:
+                as: "${ .body + { source: 'primary' } }"
+          
+          - backupDataSource:
+              call: http
+              with:
+                method: get
+                endpoint: https://backup.example.com/api/data/{id}
+                timeout:
+                  after: PT5S
+              output:
+                as: "${ .body + { source: 'backup' } }"
+          
+          - cacheDataSource:
+              call: http
+              with:
+                method: get
+                endpoint: https://cache.example.com/api/data/{id}
+                timeout:
+                  after: PT2S
+              output:
+                as: "${ .body + { source: 'cache' } }"
+    # Output is from whichever source responded first
+  
+  - logDataSource:
+      set:
+        result:
+          data: "${ . }"
+          sourceUsed: "${ .source }"
+          timestamp: "${ now() }"
+```
+
+### Parallel Processing with Aggregation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: parallel-aggregation
+  version: '1.0.0'
+do:
+  - processMultipleRegions:
+      fork:
+        branches:
+          - processNorthRegion:
+              call: http
+              with:
+                method: post
+                endpoint: https://api.example.com/process
+                body:
+                  region: "north"
+                  data: "${ .data }"
+              output:
+                as: "${ .body.results }"
+          
+          - processSouthRegion:
+              call: http
+              with:
+                method: post
+                endpoint: https://api.example.com/process
+                body:
+                  region: "south"
+                  data: "${ .data }"
+              output:
+                as: "${ .body.results }"
+          
+          - processEastRegion:
+              call: http
+              with:
+                method: post
+                endpoint: https://api.example.com/process
+                body:
+                  region: "east"
+                  data: "${ .data }"
+              output:
+                as: "${ .body.results }"
+          
+          - processWestRegion:
+              call: http
+              with:
+                method: post
+                endpoint: https://api.example.com/process
+                body:
+                  region: "west"
+                  data: "${ .data }"
+              output:
+                as: "${ .body.results }"
+      output:
+        as: "${ .[0] + .[1] + .[2] + .[3] }"  # Combine all results
+  
+  - calculateTotals:
+      set:
+        summary:
+          totalProcessed: "${ length(.) }"
+          totalValue: "${ map(.value) | add }"
+          completedAt: "${ now() }"
+```
+
+## Configuration
+
+### branches (required)
+
+Defines the tasks to execute in parallel. Each branch receives the same input:
+
+```yaml
+fork:
+  branches:
+    - branchName1:
+        # task definition
+    - branchName2:
+        # task definition
+```
+
+### compete (optional)
+
+Determines completion behavior:
+
+- `false` (default): Wait for all branches to complete
+- `true`: Complete when first branch finishes
+
+```yaml
+fork:
+  compete: true
+  branches:
+    # ...
+```
+
+## Error Handling
+
+If any branch fails, the entire Fork task fails unless errors are caught:
+
+```yaml
+- safeParallelExecution:
+    try:
+      - parallelCalls:
+          fork:
+            branches:
+              - call1:
+                  call: http
+                  # might fail
+              - call2:
+                  call: http
+                  # might fail
+    catch:
+      errors:
+        with:
+          type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+      as: forkError
+      do:
+        - handleError:
+            set:
+              error: "One or more parallel calls failed"
+              details: "${ $forkError }"
+```
+
+## Output Format
+
+### Default Mode (compete: false)
+
+Output is an array with results in branch declaration order:
+
+```yaml
+fork:
+  branches:
+    - a:
+        set:
+          result: "A"
+    - b:
+        set:
+          result: "B"
+# Output: [{ "result": "A" }, { "result": "B" }]
+```
+
+Access individual results by index:
+
+```yaml
+- processForkResults:
+    set:
+      resultA: "${ .[0].result }"
+      resultB: "${ .[1].result }"
+```
+
+### Compete Mode (compete: true)
+
+Output is the single result from the winning branch:
+
+```yaml
+fork:
+  compete: true
+  branches:
+    - fast:
+        set:
+          result: "Fast"
+    - slow:
+        set:
+          result: "Slow"
+# Output: { "result": "Fast" } (or "Slow" if it won)
+```
+
+## Best Practices
+
+1. **Use for independent operations** - Branches should not depend on each other
+2. **Set appropriate timeouts** - Prevent slow branches from blocking completion
+3. **Handle errors in branches** - Use Try/Catch within branches for resilience
+4. **Transform output** - Use `output.as` to restructure the array result
+5. **Consider resource limits** - Don't create too many parallel branches
+6. **Use compete for redundancy** - Race multiple data sources for reliability
+7. **Name branches clearly** - Make the parallel operations self-documenting
+
+## Common Patterns
+
+### Fan-out/Fan-in
+
+```yaml
+do:
+  - fanOut:
+      fork:
+        branches:
+          - process1:
+              # ...
+          - process2:
+              # ...
+          - process3:
+              # ...
+  - fanIn:
+      set:
+        aggregated: "${ . }"  # Combine all results
+```
+
+### Parallel with Sequential Fallback
+
+```yaml
+do:
+  - tryParallel:
+      try:
+        - parallelAttempt:
+            fork:
+              compete: true
+              branches:
+                - source1:
+                    # ...
+                - source2:
+                    # ...
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        do:
+          - sequentialFallback:
+              call: http
+              # Try one source sequentially
+```
+
+## Related Topics
+
+- [Do Task](/tasks/do) - Execute tasks sequentially
+- [Try/Catch](/tasks/try-catch) - Handle errors in parallel branches
+- [For Task](/tasks/for) - Iterate over collections

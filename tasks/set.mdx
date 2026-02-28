@@ -1,0 +1,484 @@
+---
+title: Set Task
+description: Create and modify workflow variables and data
+---
+
+The Set task creates or modifies data within the workflow, enabling data initialization, transformation, and manipulation.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: set-variables
+  version: '1.0.0'
+do:
+  - initializeData:
+      set:
+        user:
+          name: "Alice"
+          id: 12345
+          email: "alice@example.com"
+        status: active
+        createdAt: "${ now() }"
+  
+  - processData:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/users
+        body:
+          user: "${ .user }"
+          status: "${ .status }"
+```
+
+## How It Works
+
+The Set task defines its output structure directly:
+
+```yaml
+- createObject:
+    set:
+      field1: "static value"
+      field2: "${ .inputField }"  # From input
+      field3: "${ .field1 + ' computed' }"  # Computed
+      nested:
+        value: "${ now() }"
+# Output: { "field1": "static value", "field2": ..., "field3": ..., "nested": { "value": ... } }
+```
+
+## Complete Examples
+
+### Data Initialization
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: initialize-order
+  version: '1.0.0'
+do:
+  - initializeOrder:
+      set:
+        order:
+          id: "${ .input.orderId || uuid() }"
+          createdAt: "${ now() }"
+          status: PENDING
+          customer:
+            id: "${ .input.customerId }"
+            name: "${ .input.customerName }"
+            email: "${ .input.customerEmail }"
+          items: "${ .input.items }"
+          total: 0
+          currency: USD
+  
+  - calculateTotal:
+      set:
+        order: "${ .order + { 
+          total: (.order.items | map(.price * .quantity) | add),
+          itemCount: length(.order.items)
+        } }"
+```
+
+### Data Transformation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: transform-user-data
+  version: '1.0.0'
+do:
+  - fetchUserData:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/users/{userId}
+      output:
+        as: rawUser
+  
+  - transformUser:
+      set:
+        user:
+          id: "${ .rawUser.id }"
+          displayName: "${ .rawUser.firstName + ' ' + .rawUser.lastName }"
+          email: "${ .rawUser.email }"
+          joinDate: "${ .rawUser.createdAt | fromdateiso8601 | strftime('%Y-%m-%d') }"
+          membershipTier: "${
+            if (.rawUser.totalPurchases > 10000) then 'platinum'
+            elif (.rawUser.totalPurchases > 5000) then 'gold'
+            elif (.rawUser.totalPurchases > 1000) then 'silver'
+            else 'bronze'
+            end
+          }"
+          preferences:
+            newsletter: "${ .rawUser.preferences.newsletter // false }"
+            sms: "${ .rawUser.preferences.sms // false }"
+          stats:
+            totalOrders: "${ length(.rawUser.orders) }"
+            totalSpent: "${ .rawUser.totalPurchases }"
+            averageOrderValue: "${ .rawUser.totalPurchases / length(.rawUser.orders) }"
+```
+
+### Aggregating Data
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: aggregate-results
+  version: '1.0.0'
+do:
+  - fetchProducts:
+      call: http
+      with:
+        method: get
+        endpoint: https://products.example.com/api/products
+      output:
+        as: products
+  
+  - fetchPricing:
+      call: http
+      with:
+        method: get
+        endpoint: https://pricing.example.com/api/prices
+      output:
+        as: pricing
+  
+  - fetchInventory:
+      call: http
+      with:
+        method: get
+        endpoint: https://inventory.example.com/api/stock
+      output:
+        as: inventory
+  
+  - aggregateData:
+      set:
+        catalog: "${
+          .products | map({
+            id: .id,
+            name: .name,
+            description: .description,
+            price: (.pricing | map(select(.productId == .id)) | .[0].price),
+            inStock: (.inventory | map(select(.productId == .id)) | .[0].quantity > 0),
+            available: (.inventory | map(select(.productId == .id)) | .[0].quantity)
+          })
+        }"
+        summary:
+          totalProducts: "${ length(.products) }"
+          inStockCount: "${ .catalog | map(select(.inStock)) | length }"
+          totalValue: "${ .catalog | map(.price * .available) | add }"
+```
+
+### Conditional Data Preparation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: conditional-data
+  version: '1.0.0'
+do:
+  - prepareRequest:
+      set:
+        apiRequest:
+          endpoint: "${ 
+            if (.input.environment == 'production') then 'https://api.example.com'
+            elif (.input.environment == 'staging') then 'https://staging-api.example.com'
+            else 'https://dev-api.example.com'
+            end
+          }"
+          headers:
+            Authorization: "Bearer ${ .input.token }"
+            Content-Type: application/json
+            X-Request-ID: "${ uuid() }"
+            X-Environment: "${ .input.environment }"
+          body:
+            userId: "${ .input.userId }"
+            operation: "${ .input.operation }"
+            parameters: "${ .input.parameters // {} }"
+            metadata:
+              timestamp: "${ now() }"
+              source: workflow-engine
+              requestId: "${ uuid() }"
+  
+  - executeRequest:
+      call: http
+      with:
+        method: post
+        endpoint: "${ .apiRequest.endpoint }"
+        headers: "${ .apiRequest.headers }"
+        body: "${ .apiRequest.body }"
+```
+
+### Error Response Formatting
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: format-error-response
+  version: '1.0.0'
+do:
+  - processRequest:
+      try:
+        - execute:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/process
+              body: "${ .input }"
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: error
+        do:
+          - formatError:
+              set:
+                response:
+                  success: false
+                  error:
+                    code: "${ $error.status || 'UNKNOWN' }"
+                    message: "${ $error.title || 'An error occurred' }"
+                    details: "${ $error.detail }"
+                    type: "${ $error.type }"
+                  timestamp: "${ now() }"
+                  requestId: "${ .input.requestId || uuid() }"
+                  suggestions:
+                    - Try again later
+                    - Contact support if the issue persists
+                  metadata:
+                    endpoint: "${ $error.instance }"
+                    attemptedAt: "${ now() }"
+```
+
+### Array Manipulation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: array-operations
+  version: '1.0.0'
+do:
+  - manipulateArrays:
+      set:
+        # Filter array
+        activeUsers: "${ .users | map(select(.status == 'active')) }"
+        
+        # Map array
+        userIds: "${ .users | map(.id) }"
+        
+        # Sort array
+        sortedByAge: "${ .users | sort_by(.age) }"
+        
+        # Group by
+        byStatus: "${ .users | group_by(.status) }"
+        
+        # Unique values
+        uniqueRoles: "${ .users | map(.role) | unique }"
+        
+        # Aggregate
+        totalAge: "${ .users | map(.age) | add }"
+        averageAge: "${ (.users | map(.age) | add) / length(.users) }"
+        
+        # Combine arrays
+        allItems: "${ .list1 + .list2 }"
+        
+        # Find first
+        adminUser: "${ .users | map(select(.role == 'admin')) | .[0] }"
+```
+
+### String Manipulation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: string-operations
+  version: '1.0.0'
+do:
+  - manipulateStrings:
+      set:
+        # Concatenation
+        fullName: "${ .firstName + ' ' + .lastName }"
+        
+        # Case conversion
+        uppercase: "${ .text | ascii_upcase }"
+        lowercase: "${ .text | ascii_downcase }"
+        
+        # Substring
+        first10: "${ .text | .[0:10] }"
+        
+        # Trim
+        trimmed: "${ .text | ltrimstr(' ') | rtrimstr(' ') }"
+        
+        # Split
+        words: "${ .text | split(' ') }"
+        
+        # Join
+        joined: "${ .words | join(', ') }"
+        
+        # Replace
+        replaced: "${ .text | gsub('old'; 'new') }"
+        
+        # Test pattern
+        isEmail: "${ .email | test('^[^@]+@[^@]+\\.[^@]+$') }"
+```
+
+## Configuration
+
+### set (required)
+
+Object defining the output structure:
+
+```yaml
+set:
+  field: value
+  computed: "${ expression }"
+  nested:
+    field: "${ .inputField }"
+```
+
+## Runtime Expressions
+
+Set tasks use runtime expressions for dynamic values:
+
+```yaml
+set:
+  # Access input
+  value: "${ .inputField }"
+  
+  # Access context
+  workflowId: "${ $workflow.id }"
+  
+  # Call functions
+  timestamp: "${ now() }"
+  uniqueId: "${ uuid() }"
+  
+  # Conditional
+  status: "${ if (.approved) then 'active' else 'pending' end }"
+  
+  # Computation
+  total: "${ .price * .quantity }"
+  
+  # Array operations
+  count: "${ length(.items) }"
+  sum: "${ .numbers | add }"
+```
+
+## Common JQ Operations
+
+### Object Operations
+
+```yaml
+set:
+  # Merge objects
+  merged: "${ .obj1 + .obj2 }"
+  
+  # Add field
+  extended: "${ . + { newField: 'value' } }"
+  
+  # Remove field
+  reduced: "${ . | del(.fieldToRemove) }"
+  
+  # Select fields
+  subset: "${ { id: .id, name: .name } }"
+```
+
+### Type Checking
+
+```yaml
+set:
+  isArray: "${ . | type == 'array' }"
+  isObject: "${ . | type == 'object' }"
+  isString: "${ . | type == 'string' }"
+  isNumber: "${ . | type == 'number' }"
+  isNull: "${ . == null }"
+```
+
+### Date/Time Operations
+
+```yaml
+set:
+  currentTime: "${ now() }"
+  timestamp: "${ now() | fromdateiso8601 }"
+  formatted: "${ now() | fromdateiso8601 | strftime('%Y-%m-%d %H:%M:%S') }"
+  parsed: "${ .dateString | fromdateiso8601 }"
+```
+
+## Best Practices
+
+1. **Use for data preparation** - Transform data before external calls
+2. **Keep expressions simple** - Complex logic should be broken into multiple Set tasks
+3. **Use meaningful names** - Make field names self-documenting
+4. **Validate transformed data** - Ensure transformations produce expected structures
+5. **Document complex transformations** - Add comments for non-obvious logic
+6. **Reuse computed values** - Store intermediate results for reuse
+7. **Test expressions** - Verify JQ expressions produce correct output
+
+## Common Patterns
+
+### Default Values
+
+```yaml
+set:
+  value: "${ .input.value // 'default' }"
+  count: "${ .input.count // 0 }"
+  items: "${ .input.items // [] }"
+```
+
+### Null Coalescing
+
+```yaml
+set:
+  name: "${ .user.name // .user.username // 'Anonymous' }"
+```
+
+### Conditional Fields
+
+```yaml
+set:
+  user: "${ 
+    { id: .id, name: .name } + 
+    (if .email then { email: .email } else {} end) +
+    (if .phone then { phone: .phone } else {} end)
+  }"
+```
+
+### Accumulator Pattern
+
+```yaml
+set:
+  accumulated: "${ (.accumulated // []) + [.newItem] }"
+  total: "${ (.total // 0) + .amount }"
+```
+
+## Data Flow
+
+Set task output becomes the defined structure:
+
+```yaml
+- step1:
+    # Input: { "value": 10 }
+    set:
+      doubled: "${ .value * 2 }"
+      original: "${ .value }"
+# Output: { "doubled": 20, "original": 10 }
+
+- step2:
+    # Input is step1 output: { "doubled": 20, "original": 10 }
+    set:
+      result: "${ .doubled + .original }"
+# Output: { "result": 30 }
+```
+
+## Related Topics
+
+- [Runtime Expressions](../reference/runtime-expressions) - JQ expression syntax
+- [Do Task](/tasks/do) - Sequential data flow
+- [For Task](/tasks/for) - Iterative transformations
+- [Call Task](/tasks/call) - Use transformed data in calls

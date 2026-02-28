@@ -1,0 +1,371 @@
+---
+title: Do Task
+description: Execute tasks sequentially in order
+---
+
+The Do task is the fundamental flow control construct for executing a sequence of tasks in order. Each task's output becomes the input for the next task.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: sequential-tasks
+  version: '1.0.0'
+do:
+  - processOrder:
+      do:
+        - validateOrder:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/validate
+              body: "${ .order }"
+        - reserveInventory:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/inventory/reserve
+              body: "${ .order.items }"
+        - processPayment:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/payments
+              body: "${ .order.payment }"
+```
+
+## How It Works
+
+Tasks execute in the order they appear:
+
+1. The first task receives the Do task's input
+2. Each subsequent task receives the previous task's output
+3. The Do task's output is the last task's output
+
+```yaml
+do:
+  - sequentialFlow:
+      do:
+        - step1:
+            set:
+              result: "Value from Step 1"
+        - step2:
+            set:
+              # Input is output from step1: { "result": "Value from Step 1" }
+              resultB: "${ .result + ' and Step 2' }"
+        - step3:
+            set:
+              # Input is output from step2: { "resultB": "..." }
+              final: "${ .resultB }"
+# Final output: { "final": "Value from Step 1 and Step 2" }
+```
+
+## Complete Examples
+
+### Multi-Step Data Processing
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: data-pipeline
+  version: '1.0.0'
+do:
+  - dataPipeline:
+      do:
+        - fetchRawData:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/raw-data/{datasetId}
+            output:
+              as: "${ .body.data }"
+        
+        - cleanData:
+            set:
+              cleaned: "${ [.[] | select(.status == 'active')] }"
+        
+        - enrichData:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/enrich
+              body:
+                items: "${ .cleaned }"
+            output:
+              as: "${ .body.enriched }"
+        
+        - transformData:
+            set:
+              result:
+                count: "${ length(.enriched) }"
+                items: "${ .enriched }"
+                processedAt: "${ now() }"
+```
+
+### Order Processing Flow
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-processing
+  version: '1.0.0'
+do:
+  - processOrder:
+      do:
+        - initializeOrder:
+            set:
+              orderData:
+                id: "${ .input.orderId }"
+                status: "PROCESSING"
+                items: "${ .input.items }"
+                customer: "${ .input.customer }"
+                createdAt: "${ now() }"
+        
+        - validateInventory:
+            call: http
+            with:
+              method: post
+              endpoint: https://inventory.example.com/api/validate
+              body:
+                items: "${ .orderData.items }"
+        
+        - calculateTotal:
+            set:
+              orderData: "${ .orderData + { total: (.body.items | map(.price * .quantity) | add) } }"
+        
+        - processPayment:
+            try:
+              - chargeCustomer:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://payments.example.com/api/charge
+                    body:
+                      customerId: "${ .orderData.customer.id }"
+                      amount: "${ .orderData.total }"
+            catch:
+              errors:
+                with:
+                  type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+              retry:
+                delay:
+                  seconds: 2
+                backoff:
+                  exponential: {}
+                limit:
+                  attempt:
+                    count: 3
+        
+        - updateOrderStatus:
+            set:
+              orderData: "${ .orderData + { status: 'CONFIRMED', confirmedAt: now() } }"
+```
+
+### Nested Do Blocks
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: nested-do
+  version: '1.0.0'
+do:
+  - outerFlow:
+      do:
+        - preparation:
+            set:
+              initialized: true
+              data: "${ .input }"
+        
+        - mainProcessing:
+            do:
+              - validate:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://api.example.com/validate
+                    body: "${ .data }"
+              
+              - transform:
+                  set:
+                    processed: "${ .body.validatedData }"
+              
+              - enrich:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://api.example.com/enrich
+                    body: "${ .processed }"
+        
+        - finalization:
+            set:
+              result:
+                success: true
+                data: "${ .body.enrichedData }"
+                completedAt: "${ now() }"
+```
+
+## Error Handling
+
+If any task in a Do block fails, execution stops unless wrapped in Try/Catch:
+
+```yaml
+do:
+  - safePipeline:
+      do:
+        - step1:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/data
+        
+        - step2:
+            try:
+              - riskyOperation:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://api.example.com/process
+                    body: "${ .body }"
+            catch:
+              errors:
+                with:
+                  type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+              as: processingError
+              do:
+                - handleError:
+                    set:
+                      result:
+                        success: false
+                        error: "${ $processingError.message }"
+                        fallbackData: null
+        
+        - step3:
+            # This executes whether step2 succeeded or was caught
+            set:
+              final: "${ .result || .body }"
+```
+
+## Conditional Execution
+
+Combine Do with conditional logic:
+
+```yaml
+do:
+  - conditionalFlow:
+      do:
+        - checkCondition:
+            set:
+              shouldProcess: "${ .input.priority == 'high' }"
+        
+        - processIfNeeded:
+            if: "${ .shouldProcess }"
+            do:
+              - highPriorityStep1:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://api.example.com/priority
+                    body: "${ .input }"
+              - highPriorityStep2:
+                  set:
+                    processed: true
+        
+        - normalProcessing:
+            if: "${ !.shouldProcess }"
+            set:
+              processed: false
+```
+
+## Best Practices
+
+1. **Keep sequences focused** - Group related operations together
+2. **Use meaningful task names** - Make the flow self-documenting
+3. **Handle errors appropriately** - Use Try/Catch for operations that might fail
+4. **Transform data explicitly** - Use Set tasks to make data transformations clear
+5. **Avoid deep nesting** - Consider breaking complex flows into separate workflows
+6. **Document complex flows** - Add comments or metadata for clarity
+
+## Data Flow Pattern
+
+```yaml
+# Input flows through the sequence:
+do:
+  - pipeline:
+      do:
+        - extract:
+            # Receives: Do task input
+            call: http
+            # ...
+        - transform:
+            # Receives: extract task output
+            set:
+              # ...
+        - load:
+            # Receives: transform task output
+            call: http
+            # ...
+# Do task output is the 'load' task output
+```
+
+## Common Patterns
+
+### Extract-Transform-Load (ETL)
+
+```yaml
+do:
+  - etlPipeline:
+      do:
+        - extract:
+            call: http
+            with:
+              method: get
+              endpoint: https://source.example.com/data
+        - transform:
+            set:
+              transformed: "${ .body | map({ id: .id, value: .value * 2 }) }"
+        - load:
+            call: http
+            with:
+              method: post
+              endpoint: https://target.example.com/data
+              body: "${ .transformed }"
+```
+
+### Validation-Processing-Notification
+
+```yaml
+do:
+  - businessFlow:
+      do:
+        - validate:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/validate
+              body: "${ .input }"
+        - process:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/process
+              body: "${ .body.validatedData }"
+        - notify:
+            emit:
+              event:
+                with:
+                  source: workflow-engine
+                  type: com.example.processing.completed
+                  data: "${ .body.result }"
+```
+
+## Related Topics
+
+- [Fork Task](/tasks/fork) - Execute tasks in parallel
+- [Switch Task](/tasks/switch) - Conditional branching
+- [Try/Catch](/tasks/try-catch) - Error handling
+- [For Task](/tasks/for) - Iterate over collections

@@ -1,0 +1,341 @@
+---
+title: Database Migrations
+description: Managing database schema changes with Flyway
+---
+
+## Overview
+
+Lemline uses Flyway for database schema migrations across PostgreSQL, MySQL, and H2. Migrations are versioned SQL files that create and update tables for workflow definitions, instances, retries, waits, listeners, and more.
+
+## Migration Strategy
+
+Lemline follows a **database-per-dialect** approach:
+
+- PostgreSQL migrations: `db/migration/postgresql/`
+- MySQL migrations: `db/migration/mysql/`
+- H2 migrations: `db/migration/h2/`
+
+Each database has its own set of migration files to handle dialect-specific syntax and features.
+
+## Running Migrations
+
+### Automatic Migration on Startup
+
+Enable automatic migrations in your configuration:
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    baseline-on-migrate: true
+    migrate-at-start: true
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: ${POSTGRES_PASSWORD}
+```
+
+When `migrate-at-start: true`, Flyway runs pending migrations during application startup.
+
+### Manual Migration via CLI
+
+Run migrations manually using the CLI:
+
+```bash
+# Run pending migrations
+./lemline migrate --config=lemline.yaml
+
+# Check migration status
+./lemline migrate status
+
+# Preview migrations without executing
+./lemline migrate --pretend
+
+# Force migration even if validation fails
+./lemline migrate --force
+```
+
+### Using JVM JAR
+
+```bash
+java -jar lemline-runner.jar migrate --config=lemline.yaml
+```
+
+## Migration Versioning
+
+Migrations follow a versioned naming convention:
+
+```
+V{VERSION}__{DESCRIPTION}.sql
+```
+
+Examples:
+- `V000__Create_lemline_definitions_table.sql`
+- `V100__Create_lemline_waits_table.sql`
+- `V200__Create_lemline_retries_table.sql`
+- `V300__Create_lemline_parents_table.sql`
+- `V400__Create_lemline_schedules_table.sql`
+- `V500__Create_lemline_failures_table.sql`
+- `V600__Create_lemline_forks_table.sql`
+- `V700__Create_lemline_listeners_tables.sql`
+- `V800__Create_pgmq_schema.sql` (PostgreSQL only)
+- `V901__Create_lemline_gateway_command_outbox_table.sql`
+
+### Version Number Ranges
+
+Modules use specific version ranges:
+
+| Range | Module | Purpose |
+|-------|--------|--------|
+| 0-99 | Core | Definitions, instances |
+| 100-199 | Waits | Wait task persistence |
+| 200-299 | Retries | Retry task persistence |
+| 300-399 | Parents | Parent workflow tracking |
+| 400-499 | Schedules | Scheduled workflow triggers |
+| 500-599 | Failures | Failure audit log |
+| 600-699 | Forks | Fork/join task state |
+| 700-799 | Listeners | Listen task correlation |
+| 800-899 | PGMQ | PostgreSQL message queue |
+| 900-999 | Gateway | gRPC gateway outbox |
+
+## Migration History
+
+Flyway tracks applied migrations in the `lemline_flyway_schema_history` table:
+
+```sql
+SELECT * FROM lemline_flyway_schema_history ORDER BY installed_rank;
+```
+
+Columns:
+- `installed_rank` - Order of application
+- `version` - Migration version
+- `description` - Migration description
+- `type` - Migration type (SQL, Java)
+- `script` - Migration filename
+- `checksum` - File content checksum
+- `installed_by` - Database user who ran migration
+- `installed_on` - Timestamp of migration
+- `execution_time` - Duration in milliseconds
+- `success` - Whether migration succeeded
+
+## Common Migration Patterns
+
+### Creating a Table
+
+**PostgreSQL:**
+```sql
+CREATE TABLE IF NOT EXISTS lemline.lemline_waits
+(
+    id                          VARCHAR(255)                        NOT NULL PRIMARY KEY,
+    workflow_id                 VARCHAR(255)                        NOT NULL,
+    workflow_namespace          VARCHAR(255)                        NOT NULL,
+    workflow_name               VARCHAR(255)                        NOT NULL,
+    workflow_version            VARCHAR(255)                        NOT NULL,
+    node_position               VARCHAR(255)                        NOT NULL,
+    resume_at                   TIMESTAMP                           NOT NULL,
+    created_at                  TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    outbox_scheduled_for        TIMESTAMP,
+    outbox_delayed_until        TIMESTAMP,
+    outbox_attempt_count        INT       DEFAULT 0,
+    outbox_completed_at         TIMESTAMP,
+    outbox_failed_at            TIMESTAMP,
+    outbox_error_class          VARCHAR(500),
+    outbox_error_message        TEXT,
+    outbox_error_stacktrace     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_lemline_waits_outbox
+    ON lemline.lemline_waits (outbox_scheduled_for, outbox_delayed_until, outbox_completed_at, outbox_failed_at)
+    WHERE outbox_completed_at IS NULL AND outbox_failed_at IS NULL;
+```
+
+**MySQL:**
+```sql
+CREATE TABLE IF NOT EXISTS lemline_waits
+(
+    id                          VARCHAR(255)                        NOT NULL PRIMARY KEY,
+    workflow_id                 VARCHAR(255)                        NOT NULL,
+    workflow_namespace          VARCHAR(255)                        NOT NULL,
+    workflow_name               VARCHAR(255)                        NOT NULL,
+    workflow_version            VARCHAR(255)                        NOT NULL,
+    node_position               VARCHAR(255)                        NOT NULL,
+    resume_at                   TIMESTAMP(3)                        NOT NULL,
+    created_at                  TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) NOT NULL,
+    outbox_scheduled_for        TIMESTAMP(3) NULL,
+    outbox_delayed_until        TIMESTAMP(3) NULL,
+    outbox_attempt_count        INT          DEFAULT 0,
+    outbox_completed_at         TIMESTAMP(3) NULL,
+    outbox_failed_at            TIMESTAMP(3) NULL,
+    outbox_error_class          VARCHAR(500),
+    outbox_error_message        TEXT,
+    outbox_error_stacktrace     TEXT,
+    INDEX idx_lemline_waits_outbox (outbox_scheduled_for, outbox_delayed_until, outbox_completed_at, outbox_failed_at)
+);
+```
+
+### Adding an Index
+
+```sql
+-- PostgreSQL
+CREATE INDEX IF NOT EXISTS idx_lemline_listeners_correlation
+    ON lemline.lemline_listeners(correlation_key)
+    WHERE outbox_completed_at IS NULL;
+
+-- MySQL
+CREATE INDEX idx_lemline_listeners_correlation
+    ON lemline_listeners(correlation_key);
+```
+
+### Adding a Column
+
+```sql
+-- PostgreSQL
+ALTER TABLE lemline.lemline_definitions
+ADD COLUMN IF NOT EXISTS tags JSONB;
+
+-- MySQL
+ALTER TABLE lemline_definitions
+ADD COLUMN tags JSON;
+```
+
+## Database-Specific Considerations
+
+### PostgreSQL
+
+- Uses explicit schema: `lemline.table_name`
+- Schema auto-created by Flyway when `create-schemas: true`
+- Supports `IF NOT EXISTS` for idempotent migrations
+- Supports partial indexes with `WHERE` clause
+- JSONB column type for structured data
+
+### MySQL
+
+- No schema prefix (uses database name)
+- Requires `TIMESTAMP(3)` for millisecond precision
+- `NULL` must be explicit for nullable columns
+- JSON column type (not JSONB)
+- No partial indexes
+
+### H2 (Testing Only)
+
+- Compatible with PostgreSQL syntax in most cases
+- Used for unit tests and local development
+- Not recommended for production
+
+## Analytics Database Migrations
+
+The analytics database has separate migrations:
+
+```yaml
+lemline:
+  analytics:
+    migrate-at-start: true
+    baseline-on-migrate: false
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline_analytics
+      username: postgres
+      password: ${ANALYTICS_PASSWORD}
+```
+
+Migration paths:
+- PostgreSQL: `db/migration/analytics/postgresql/`
+- H2: `db/migration/analytics/h2/`
+
+Analytics migrations are versioned independently:
+- `V001__Create_lemline_lifecycle_events_table.sql`
+- `V002__Add_dashboard_indexes.sql`
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Migration checksum mismatch">
+    **Cause:** Migration file was modified after being applied.
+
+    **Solution:** 
+    - Never modify applied migration files
+    - Create a new migration to fix issues
+    - For development databases, you can delete the `lemline_flyway_schema_history` entry and reapply
+
+    ```sql
+    DELETE FROM lemline_flyway_schema_history WHERE version = 'VERSION_NUMBER';
+    ```
+  </Accordion>
+
+  <Accordion title="Migration failed partway through">
+    **Cause:** SQL error or connection loss during migration.
+
+    **Solution:**
+    - Check the Flyway history table for failed migrations
+    - Manually fix the database state if needed
+    - Use `--force` flag to retry failed migration
+
+    ```bash
+    ./lemline migrate --force
+    ```
+  </Accordion>
+
+  <Accordion title="Wrong database type selected">
+    **Cause:** Configuration points to wrong database type.
+
+    **Solution:**
+    - Verify `lemline.database.type` matches your database
+    - Check connection string in logs
+    - Use `./lemline config` to verify configuration
+
+    ```bash
+    ./lemline config | grep database.type
+    ```
+  </Accordion>
+
+  <Accordion title="Permission denied during migration">
+    **Cause:** Database user lacks CREATE TABLE or ALTER TABLE permissions.
+
+    **Solution:**
+    - Grant necessary permissions to the database user:
+
+    **PostgreSQL:**
+    ```sql
+    GRANT CREATE ON SCHEMA lemline TO lemline_user;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA lemline TO lemline_user;
+    ```
+
+    **MySQL:**
+    ```sql
+    GRANT CREATE, ALTER, INDEX ON lemline.* TO 'lemline_user'@'%';
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+1. **Always baseline on first deployment:**
+   ```yaml
+   lemline:
+     database:
+       baseline-on-migrate: true
+   ```
+
+2. **Test migrations on all supported databases** before deploying to production
+
+3. **Never modify applied migrations** - create new versioned migrations instead
+
+4. **Use `IF NOT EXISTS` and `IF EXISTS`** for idempotent PostgreSQL migrations
+
+5. **Back up production databases** before running migrations
+
+6. **Run `migrate status`** to verify all migrations applied successfully
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" href="./monitoring" icon="chart-simple">
+    Set up metrics and alerting
+  </Card>
+  <Card title="Troubleshooting" href="./troubleshooting" icon="wrench">
+    Common issues and solutions
+  </Card>
+</CardGroup>

@@ -1,0 +1,504 @@
+---
+title: migrate
+description: Run database migrations
+---
+
+The `migrate` command manages database schema migrations for the Lemline runtime using Flyway.
+
+## Usage
+
+```bash
+lemline migrate [OPTIONS]
+lemline migrate <subcommand> [OPTIONS]
+```
+
+## Description
+
+Lemline uses Flyway for database migrations to:
+
+- Initialize the database schema on first deployment
+- Apply incremental schema changes during upgrades
+- Track migration history and status
+- Support PostgreSQL, MySQL, and H2 databases
+
+Migrations are versioned SQL scripts that run in order. Each migration is tracked to ensure it only runs once.
+
+## Subcommands
+
+- `status` - Show the status of database migrations
+
+---
+
+## migrate (default)
+
+Run pending database migrations.
+
+### Options
+
+<ParamField path="--pretend" type="flag" default="false">
+  Show what migrations would be applied without actually applying them.
+  
+  Useful for previewing changes before running them.
+</ParamField>
+
+<ParamField path="--force" type="flag" default="false">
+  Force migration without confirmation prompt.
+  
+  Use in automated scripts and CI/CD pipelines.
+</ParamField>
+
+### Examples
+
+#### Preview Pending Migrations
+
+```bash
+lemline migrate --pretend
+```
+
+Output:
+
+```
+Pending migrations:
+  - V1: Create initial schema
+  - V2: Add workflow instances table
+  - V3: Add indexes for performance
+```
+
+#### Run Migrations with Confirmation
+
+```bash
+lemline migrate
+```
+
+Output:
+
+```
+Pending migrations:
+  - V1: Create initial schema
+  - V2: Add workflow instances table
+
+Are you sure you want to apply the pending migrations? [y/N]: y
+Database migration completed successfully.
+```
+
+#### Run Migrations without Confirmation
+
+For automation:
+
+```bash
+lemline migrate --force
+```
+
+Output:
+
+```
+Pending migrations:
+  - V3: Add analytics tables
+
+Database migration completed successfully.
+```
+
+#### No Pending Migrations
+
+```bash
+$ lemline migrate
+No pending migrations.
+```
+
+---
+
+## migrate status
+
+Display the status of all database migrations.
+
+### Usage
+
+```bash
+lemline migrate status
+```
+
+### Description
+
+Shows all migrations with their current state:
+
+- **SUCCESS**: Migration has been applied
+- **PENDING**: Migration is waiting to be applied
+- **FAILED**: Migration failed (manual intervention needed)
+
+### Examples
+
+#### Check Migration Status
+
+```bash
+lemline migrate status
+```
+
+Output:
+
+```
+Migration Status:
+========================
+Version         Description               State      Installed On        
+--------------------------------------------------------------------------
+V1              Create initial schema     SUCCESS    2026-02-15 10:30:00
+V2              Add instances table       SUCCESS    2026-02-15 10:30:01
+V3              Add indexes               SUCCESS    2026-02-20 14:15:30
+V4              Add analytics             PENDING    N/A                 
+V5              Add schedules table       PENDING    N/A                 
+```
+
+#### No Migrations
+
+```bash
+$ lemline migrate status
+No migrations found.
+```
+
+## Migration Workflow
+
+### Initial Setup
+
+On first deployment:
+
+```bash
+# Check database connection
+lemline config show | grep database
+
+# Preview migrations
+lemline migrate --pretend
+
+# Apply migrations
+lemline migrate
+```
+
+### Upgrading
+
+After upgrading Lemline:
+
+```bash
+# Check for new migrations
+lemline migrate status
+
+# Review pending migrations
+lemline migrate --pretend
+
+# Apply migrations
+lemline migrate
+```
+
+### Troubleshooting Failed Migrations
+
+If a migration fails:
+
+```bash
+# Check status
+lemline migrate status
+```
+
+Output:
+
+```
+Version         Description               State      Installed On        
+--------------------------------------------------------------------------
+V1              Create initial schema     SUCCESS    2026-02-15 10:30:00
+V2              Add instances table       FAILED     2026-02-20 15:00:00
+```
+
+Manual intervention:
+
+1. Check database logs for the error
+2. Fix the issue (schema conflicts, permissions, etc.)
+3. Manually mark migration as resolved or re-run
+
+## Configuration
+
+Migration settings in configuration file:
+
+```yaml lemline.yaml
+lemline:
+  database:
+    url: jdbc:postgresql://localhost:5432/lemline
+    username: lemline
+    password: secret
+  
+  flyway:
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    schemas: public
+```
+
+### Flyway Options
+
+<ParamField path="baseline-on-migrate" type="boolean" default="true">
+  Automatically baseline existing databases when running migrations for the first time.
+</ParamField>
+
+<ParamField path="locations" type="string" default="classpath:db/migration">
+  Location of migration scripts.
+</ParamField>
+
+<ParamField path="schemas" type="string" default="public">
+  Database schema(s) to manage.
+</ParamField>
+
+## Migration Scripts
+
+Migrations are SQL files in the classpath:
+
+```
+lemline-runner-common/src/main/resources/db/migration/
+  V1__Create_initial_schema.sql
+  V2__Add_workflow_instances.sql
+  V3__Add_indexes.sql
+  V4__Add_analytics_tables.sql
+```
+
+### Naming Convention
+
+```
+V<version>__<description>.sql
+```
+
+Examples:
+
+- `V1__Create_initial_schema.sql`
+- `V2__Add_workflow_instances.sql`
+- `V3.1__Add_indexes.sql`
+- `V4_0_0__Major_schema_refactor.sql`
+
+### Example Migration
+
+```sql V1__Create_initial_schema.sql
+-- Create workflow definitions table
+CREATE TABLE workflow_definitions (
+    id VARCHAR(26) PRIMARY KEY,
+    namespace VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    version VARCHAR(255) NOT NULL,
+    definition TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (namespace, name, version)
+);
+
+-- Create workflow instances table
+CREATE TABLE workflow_instances (
+    id VARCHAR(26) PRIMARY KEY,
+    workflow_id VARCHAR(26) NOT NULL,
+    namespace VARCHAR(255) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    version VARCHAR(255) NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes
+CREATE INDEX idx_instances_workflow_id ON workflow_instances(workflow_id);
+CREATE INDEX idx_instances_status ON workflow_instances(status);
+```
+
+## Database Support
+
+Lemline migrations support multiple databases:
+
+### PostgreSQL
+
+```yaml
+lemline:
+  database:
+    url: jdbc:postgresql://localhost:5432/lemline
+    username: lemline
+    password: secret
+```
+
+### MySQL
+
+```yaml
+lemline:
+  database:
+    url: jdbc:mysql://localhost:3306/lemline
+    username: lemline
+    password: secret
+```
+
+### H2 (Development)
+
+```yaml
+lemline:
+  database:
+    url: jdbc:h2:mem:lemline
+    username: sa
+    password: ""
+```
+
+## Automated Migrations
+
+### Docker Entrypoint
+
+Run migrations on container start:
+
+```dockerfile
+FROM lemline/lemline:latest
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+```
+
+```bash entrypoint.sh
+#!/bin/bash
+set -e
+
+# Run migrations
+lemline migrate --force
+
+# Start runtime
+exec lemline listen
+```
+
+### Kubernetes Init Container
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lemline-runtime
+spec:
+  template:
+    spec:
+      initContainers:
+      - name: migrate
+        image: lemline/lemline:latest
+        command:
+          - lemline
+          - migrate
+          - --force
+        volumeMounts:
+        - name: config
+          mountPath: /config
+      containers:
+      - name: runtime
+        image: lemline/lemline:latest
+        command: ["lemline", "listen"]
+```
+
+### CI/CD Pipeline
+
+```yaml .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Run Migrations
+        run: |
+          lemline --config prod.yaml migrate --force
+      
+      - name: Deploy Application
+        run: |
+          kubectl rollout restart deployment/lemline-runtime
+```
+
+## Best Practices
+
+### Always Preview First
+
+Check what will run:
+
+```bash
+lemline migrate --pretend
+```
+
+### Backup Before Migrating
+
+```bash
+# PostgreSQL
+pg_dump lemline > backup-$(date +%Y%m%d).sql
+
+# Then migrate
+lemline migrate
+```
+
+### Test Migrations in Staging
+
+Test migrations in a staging environment before production:
+
+```bash
+# Staging
+lemline --config staging.yaml migrate
+
+# Verify
+lemline --config staging.yaml migrate status
+
+# Then production
+lemline --config production.yaml migrate
+```
+
+### Version Control Migrations
+
+Keep migrations in version control and review changes:
+
+```bash
+git diff HEAD~1 -- src/main/resources/db/migration/
+```
+
+### Idempotent Migrations
+
+Write migrations that can be safely re-run:
+
+```sql
+-- Good: Idempotent
+CREATE TABLE IF NOT EXISTS my_table (...)
+
+-- Bad: Fails on second run
+CREATE TABLE my_table (...)
+```
+
+## Troubleshooting
+
+### Connection Failed
+
+```bash
+# Verify configuration
+lemline config show | grep database
+
+# Test connection
+psql -h localhost -U lemline -d lemline
+```
+
+### Permission Denied
+
+Ensure database user has migration permissions:
+
+```sql
+GRANT CREATE ON DATABASE lemline TO lemline;
+GRANT ALL PRIVILEGES ON SCHEMA public TO lemline;
+```
+
+### Migration Checksum Mismatch
+
+If migration files changed after being applied:
+
+```bash
+# Check status
+lemline migrate status
+
+# Manual Flyway repair (if needed)
+# Connect to database and update flyway_schema_history table
+```
+
+## See Also
+
+- [config](/cli/config) - View database configuration
+- [listen](/cli/listen) - Start the runtime (requires migrations)
+- [gateway](/cli/gateway) - Start the gateway (requires migrations)

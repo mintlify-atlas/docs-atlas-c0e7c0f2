@@ -1,0 +1,349 @@
+---
+title: WatchWorkflow RPC
+description: Stream workflow lifecycle events in real-time
+---
+
+The `WatchWorkflow` RPC streams workflow lifecycle events as they occur, providing real-time visibility into workflow execution.
+
+## Streaming architecture
+
+The gateway maintains a long-lived connection and pushes events from the analytics database:
+
+1. Client initiates a `WatchWorkflow` request with a workflow ID
+2. Gateway queries the analytics database for historical events
+3. Gateway streams events in order (oldest to newest)
+4. Gateway continues polling for new events until the workflow completes or the client disconnects
+
+<Info>
+  The watch stream includes **all lifecycle events**, including workflow start, task transitions, and completion/fault events.
+</Info>
+
+## Request
+
+```protobuf
+message WatchWorkflowRequest {
+  string workflow_id = 1;
+}
+```
+
+### Parameters
+
+<ParamField path="workflow_id" type="string" required>
+  The workflow instance ID to watch.
+  
+  Example: `01933d5c-7890-7e23-9abc-123456789012`
+</ParamField>
+
+## Response
+
+The RPC returns a **server stream** of `WorkflowAnalyticsEvent` messages:
+
+```protobuf
+message WorkflowAnalyticsEvent {
+  int64 cursor = 1;
+  string cloudevent_json = 2;
+}
+```
+
+### Fields
+
+<ResponseField name="cursor" type="int64">
+  Monotonically increasing sequence number for this event. Used for resumption and deduplication.
+</ResponseField>
+
+<ResponseField name="cloudevent_json" type="string">
+  CloudEvents-formatted lifecycle event as JSON. Contains workflow state transitions, task executions, and metadata.
+</ResponseField>
+
+## CloudEvents format
+
+Each event follows the [CloudEvents specification](https://cloudevents.io/):
+
+```json
+{
+  "specversion": "1.0",
+  "type": "com.lemline.workflow.started",
+  "source": "/workflows/production/order-fulfillment",
+  "id": "01933d5c-7890-7e23-9abc-123456789012",
+  "time": "2026-02-28T12:34:56.789Z",
+  "datacontenttype": "application/json",
+  "data": {
+    "workflowId": "wf-12345",
+    "namespace": "production",
+    "name": "order-fulfillment",
+    "version": "1.0.0"
+  }
+}
+```
+
+### Event types
+
+<AccordionGroup>
+  <Accordion title="com.lemline.workflow.started">
+    Workflow instance started
+    
+    ```json
+    {
+      "type": "com.lemline.workflow.started",
+      "data": {
+        "workflowId": "wf-12345",
+        "namespace": "production",
+        "name": "order-fulfillment",
+        "version": "1.0.0"
+      }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="com.lemline.workflow.completed">
+    Workflow instance completed successfully
+    
+    ```json
+    {
+      "type": "com.lemline.workflow.completed",
+      "data": {
+        "workflowId": "wf-12345",
+        "output": { "result": "success" },
+        "durationMs": 1234
+      }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="com.lemline.workflow.faulted">
+    Workflow instance faulted with an error
+    
+    ```json
+    {
+      "type": "com.lemline.workflow.faulted",
+      "data": {
+        "workflowId": "wf-12345",
+        "error": {
+          "type": "https://lemline.com/errors/validation",
+          "status": 400,
+          "title": "Validation error"
+        }
+      }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="com.lemline.task.started">
+    Task execution started
+    
+    ```json
+    {
+      "type": "com.lemline.task.started",
+      "data": {
+        "workflowId": "wf-12345",
+        "taskName": "validateOrder",
+        "taskPointer": "root.do.0"
+      }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="com.lemline.task.completed">
+    Task execution completed
+    
+    ```json
+    {
+      "type": "com.lemline.task.completed",
+      "data": {
+        "workflowId": "wf-12345",
+        "taskName": "validateOrder",
+        "taskPointer": "root.do.0",
+        "output": { "valid": true }
+      }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Examples
+
+### Using grpcurl
+
+```bash
+grpcurl -plaintext -d '{
+  "workflow_id": "01933d5c-7890-7e23-9abc-123456789012"
+}' localhost:9000 lemline.gateway.v1.WorkflowGateway/WatchWorkflow
+```
+
+Output:
+```json
+{"cursor":1,"cloudevent_json":"{\"specversion\":\"1.0\",\"type\":\"com.lemline.workflow.started\",\"source\":\"/workflows/production/order-fulfillment\",\"id\":\"wf-12345\",\"time\":\"2026-02-28T12:34:56.789Z\",\"data\":{\"workflowId\":\"wf-12345\",\"namespace\":\"production\",\"name\":\"order-fulfillment\",\"version\":\"1.0.0\"}}"}
+{"cursor":2,"cloudevent_json":"{\"specversion\":\"1.0\",\"type\":\"com.lemline.task.started\",\"source\":\"/workflows/production/order-fulfillment\",\"id\":\"evt-001\",\"time\":\"2026-02-28T12:34:57.123Z\",\"data\":{\"workflowId\":\"wf-12345\",\"taskName\":\"validateOrder\",\"taskPointer\":\"root.do.0\"}}"}
+```
+
+### Using TypeScript (Connect-ES)
+
+```typescript
+import { createPromiseClient } from "@connectrpc/connect";
+import { createGrpcWebTransport } from "@connectrpc/connect-web";
+import { WorkflowGateway } from "./gen/lemline/gateway/v1/workflow_gateway_connect";
+
+const transport = createGrpcWebTransport({
+  baseUrl: "http://localhost:9000",
+});
+
+const client = createPromiseClient(WorkflowGateway, transport);
+
+// Watch workflow events
+const stream = client.watchWorkflow({
+  workflowId: "01933d5c-7890-7e23-9abc-123456789012",
+});
+
+for await (const event of stream) {
+  const cloudEvent = JSON.parse(event.cloudeventJson);
+  console.log(`[${event.cursor}] ${cloudEvent.type}:`, cloudEvent.data);
+  
+  if (cloudEvent.type === "com.lemline.workflow.completed" ||
+      cloudEvent.type === "com.lemline.workflow.faulted") {
+    break;  // Workflow finished
+  }
+}
+```
+
+### Using Python (grpcio)
+
+```python
+import grpc
+import json
+from lemline.gateway.v1 import workflow_gateway_pb2, workflow_gateway_pb2_grpc
+
+# Create channel
+channel = grpc.insecure_channel('localhost:9000')
+stub = workflow_gateway_pb2_grpc.WorkflowGatewayStub(channel)
+
+# Watch workflow
+request = workflow_gateway_pb2.WatchWorkflowRequest(
+    workflow_id="01933d5c-7890-7e23-9abc-123456789012"
+)
+
+for event in stub.WatchWorkflow(request):
+    cloud_event = json.loads(event.cloudevent_json)
+    print(f"[{event.cursor}] {cloud_event['type']}: {cloud_event['data']}")
+    
+    if cloud_event['type'] in ['com.lemline.workflow.completed', 'com.lemline.workflow.faulted']:
+        break  # Workflow finished
+```
+
+## Polling behavior
+
+The gateway uses a long-polling mechanism with configurable intervals:
+
+<ParamField path="watch.poll-interval-ms" type="number" default="250">
+  Milliseconds between database polls for new events
+</ParamField>
+
+<ParamField path="watch.batch-size" type="number" default="256">
+  Maximum events returned per poll
+</ParamField>
+
+Configure in `.lemline.yaml`:
+
+```yaml
+lemline:
+  gateway:
+    watch:
+      poll-interval-ms: 100  # Poll every 100ms
+      batch-size: 512        # Up to 512 events per batch
+```
+
+## Error handling
+
+<ResponseField name="NOT_FOUND" type="error">
+  Workflow instance not found
+</ResponseField>
+
+<ResponseField name="UNAUTHENTICATED" type="error">
+  Missing or invalid JWT token (when authentication is enabled)
+</ResponseField>
+
+<ResponseField name="PERMISSION_DENIED" type="error">
+  JWT token lacks required scopes or namespace access
+</ResponseField>
+
+<ResponseField name="CANCELLED" type="error">
+  Client disconnected
+</ResponseField>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Handle stream reconnection">
+    Network issues may interrupt the stream. Implement reconnection logic with exponential backoff.
+    
+    ```typescript
+    async function watchWithRetry(workflowId: string) {
+      let retries = 0;
+      while (retries < 5) {
+        try {
+          const stream = client.watchWorkflow({ workflowId });
+          for await (const event of stream) {
+            processEvent(event);
+          }
+          break;  // Stream ended normally
+        } catch (error) {
+          retries++;
+          await sleep(Math.pow(2, retries) * 1000);
+        }
+      }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Parse CloudEvents safely">
+    Always validate JSON parsing to avoid crashes on malformed events.
+    
+    ```typescript
+    try {
+      const cloudEvent = JSON.parse(event.cloudeventJson);
+      // Process event
+    } catch (error) {
+      console.error("Invalid CloudEvent JSON:", error);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Track cursor for resumption">
+    Store the last processed cursor to resume watching from that point after reconnection.
+    
+    ```typescript
+    let lastCursor = 0;
+    for await (const event of stream) {
+      lastCursor = event.cursor;
+      processEvent(event);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Set client timeouts">
+    Configure appropriate timeouts for long-running streams.
+    
+    ```typescript
+    const transport = createGrpcWebTransport({
+      baseUrl: "http://localhost:9000",
+      defaultTimeoutMs: 600000,  // 10 minutes
+    });
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Start workflows" icon="play" href="/api/gateway/start-workflow">
+    Learn how to start workflow instances
+  </Card>
+  <Card title="Analytics configuration" icon="chart-line" href="/configuration/analytics">
+    Configure the analytics database
+  </Card>
+  <Card title="CloudEvents spec" icon="cloud" href="https://cloudevents.io/">
+    Learn about the CloudEvents standard
+  </Card>
+  <Card title="Observability" icon="eye" href="/operations/observability">
+    Monitor workflow execution
+  </Card>
+</CardGroup>

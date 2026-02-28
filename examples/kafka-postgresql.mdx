@@ -1,0 +1,354 @@
+---
+title: Kafka + PostgreSQL Setup
+description: Run Lemline with Kafka messaging and PostgreSQL storage
+icon: database
+---
+
+This guide shows you how to set up Lemline with Apache Kafka for messaging and PostgreSQL for persistent storage. This combination is ideal for high-throughput production environments.
+
+## Why Kafka + PostgreSQL?
+
+- **Kafka**: High-throughput, distributed message broker with excellent scalability
+- **PostgreSQL**: Robust relational database with strong consistency guarantees
+- **Use case**: Production deployments requiring high message throughput and reliable persistence
+
+## Prerequisites
+
+- Docker and Docker Compose installed
+- Lemline built locally (see [Installation](/getting-started/installation))
+- Basic understanding of Kafka and PostgreSQL
+
+## Quick Start
+
+<Steps>
+
+### Start the Infrastructure
+
+From the `examples` directory, start Kafka and PostgreSQL:
+
+```bash
+cd examples
+docker compose --profile kafka-pg up -d
+```
+
+This starts:
+- PostgreSQL (port 5432)
+- Kafka (port 9092)
+- Zookeeper (port 2181, for Kafka coordination)
+- Kafka UI (port 8080, optional management interface)
+
+### Wait for Services
+
+Check that services are healthy:
+
+```bash
+docker compose ps
+```
+
+All services should show status "Up" and health "healthy".
+
+### Configure Lemline
+
+The example includes a pre-configured file:
+
+```yaml lemline-kafka-pg.yaml
+# Lemline Configuration: Kafka + PostgreSQL
+
+lemline:
+  database:
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+
+  messaging:
+    kafka:
+      brokers: localhost:9092
+```
+
+### Start Lemline
+
+From the project root:
+
+```bash
+LEMLINE_CONFIG=./examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+```
+
+Lemline will:
+1. Connect to PostgreSQL and run migrations
+2. Connect to Kafka brokers
+3. Create necessary topics (`commands-in`, `commands-out`, `events-out`)
+4. Start listening for workflow commands
+
+### Deploy a Workflow
+
+Install the hello world workflow:
+
+```bash
+lemline definition post -f examples/workflows/hello.yaml
+```
+
+### Run a Workflow Instance
+
+```bash
+lemline instance start -n tutorial.hello-workflow -v 0.1.0
+```
+
+Watch the Lemline logs to see execution.
+
+</Steps>
+
+## Configuration Details
+
+### PostgreSQL Settings
+
+```yaml
+lemline:
+  database:
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+      # Optional advanced settings:
+      # maxPoolSize: 20
+      # connectionTimeout: 30000
+```
+
+**Environment variable overrides:**
+
+```bash
+LEMLINE_DATABASE_POSTGRESQL_HOST=db.example.com
+LEMLINE_DATABASE_POSTGRESQL_PORT=5432
+LEMLINE_DATABASE_POSTGRESQL_DATABASE=production
+LEMLINE_DATABASE_POSTGRESQL_USERNAME=lemline_user
+LEMLINE_DATABASE_POSTGRESQL_PASSWORD=secret123
+```
+
+### Kafka Settings
+
+```yaml
+lemline:
+  messaging:
+    kafka:
+      brokers: localhost:9092
+      # Optional topic configuration:
+      # commands:
+      #   topic: custom-commands-topic
+      #   partitions: 4
+      # events:
+      #   topic: custom-events-topic
+      #   partitions: 4
+```
+
+**Environment variable overrides:**
+
+```bash
+LEMLINE_MESSAGING_KAFKA_BROKERS=kafka1:9092,kafka2:9092,kafka3:9092
+```
+
+## Database Schema
+
+Lemline automatically creates the necessary tables:
+
+- **workflow_definitions**: Workflow DSL definitions
+- **workflow_instances**: Active and completed workflow instances
+- **workflow_waits**: Scheduled tasks and timeouts
+- **workflow_listeners**: Event listeners and subscriptions
+- **workflow_retries**: Retry state for failed tasks
+- **workflow_failures**: Terminal failures and errors
+- **lifecycle_analytics**: Execution metrics and history
+
+Migrations are managed by Flyway and run automatically on startup.
+
+## Kafka Topics
+
+Lemline uses three Kafka topics by default:
+
+1. **commands-in**: Incoming workflow commands (start, resume, cancel)
+2. **commands-out**: Outgoing workflow commands for task execution
+3. **events-out**: CloudEvents produced by workflows
+
+### Topic Configuration
+
+Kafka creates topics automatically with default settings (4 partitions, replication factor 1). For production, pre-create topics with appropriate settings:
+
+```bash
+# Create commands-in topic with 8 partitions
+docker exec lemline-kafka kafka-topics \
+  --create --topic lemline-commands-in \
+  --bootstrap-server localhost:9092 \
+  --partitions 8 \
+  --replication-factor 3
+
+# Create commands-out topic
+docker exec lemline-kafka kafka-topics \
+  --create --topic lemline-commands-out \
+  --bootstrap-server localhost:9092 \
+  --partitions 8 \
+  --replication-factor 3
+
+# Create events-out topic
+docker exec lemline-kafka kafka-topics \
+  --create --topic lemline-events-out \
+  --bootstrap-server localhost:9092 \
+  --partitions 8 \
+  --replication-factor 3
+```
+
+## Horizontal Scaling
+
+Run multiple Lemline instances to scale horizontally:
+
+```bash
+# Terminal 1
+LEMLINE_CONFIG=./examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner.jar listen
+
+# Terminal 2
+LEMLINE_CONFIG=./examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner.jar listen
+
+# Terminal 3
+LEMLINE_CONFIG=./examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner.jar listen
+```
+
+Kafka consumer groups ensure that each message is processed by exactly one instance.
+
+## Monitoring
+
+### Kafka UI
+
+Access the Kafka UI at http://localhost:8080 to:
+- View topics and partitions
+- Inspect messages
+- Monitor consumer lag
+- View broker metrics
+
+### PostgreSQL Monitoring
+
+Connect to PostgreSQL to query workflow state:
+
+```bash
+docker exec -it lemline-postgres psql -U postgres -d lemline
+```
+
+**Useful queries:**
+
+```sql
+-- Active workflow instances
+SELECT namespace, name, version, status, created_at
+FROM workflow_instances
+WHERE status = 'running';
+
+-- Recent failures
+SELECT wi.namespace, wi.name, wf.error_type, wf.error_message, wf.failed_at
+FROM workflow_failures wf
+JOIN workflow_instances wi ON wf.instance_id = wi.id
+ORDER BY wf.failed_at DESC
+LIMIT 10;
+
+-- Listener subscriptions
+SELECT event_type, COUNT(*) as listener_count
+FROM workflow_listeners
+GROUP BY event_type;
+```
+
+## Production Considerations
+
+<AccordionGroup>
+  <Accordion title="Database connection pooling">
+    Configure appropriate pool sizes based on your workload:
+    ```yaml
+    lemline:
+      database:
+        postgresql:
+          maxPoolSize: 50
+          minPoolSize: 10
+          connectionTimeout: 30000
+    ```
+  </Accordion>
+  
+  <Accordion title="Kafka broker configuration">
+    For production, use a multi-broker Kafka cluster with:
+    - At least 3 brokers for fault tolerance
+    - Appropriate replication factor (typically 3)
+    - Sufficient partitions for parallelism (8-16 per topic)
+  </Accordion>
+  
+  <Accordion title="PostgreSQL tuning">
+    Optimize PostgreSQL for your workload:
+    - Increase `max_connections` for concurrent workflows
+    - Tune `shared_buffers` and `effective_cache_size`
+    - Enable connection pooling with PgBouncer
+    - Configure appropriate backup and replication
+  </Accordion>
+  
+  <Accordion title="Security">
+    - Use TLS for Kafka connections
+    - Enable PostgreSQL SSL
+    - Use strong passwords and rotate credentials
+    - Configure Kafka SASL authentication
+    - Restrict network access with firewalls
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+### Kafka Connection Refused
+
+**Error:** `Connection to node -1 (localhost/127.0.0.1:9092) could not be established`
+
+**Solution:** Ensure Kafka is running and accessible:
+```bash
+docker compose ps kafka
+docker compose logs kafka
+```
+
+### PostgreSQL Connection Errors
+
+**Error:** `Connection refused` or `password authentication failed`
+
+**Solution:** Check PostgreSQL status and credentials:
+```bash
+docker compose ps postgres
+docker compose logs postgres
+```
+
+### Topic Not Created
+
+**Error:** `Topic 'lemline-commands-in' does not exist`
+
+**Solution:** Kafka auto-creates topics by default. If disabled, manually create topics (see [Kafka Topics](#kafka-topics)).
+
+## Stopping the Infrastructure
+
+```bash
+# Stop services but keep data
+docker compose --profile kafka-pg down
+
+# Stop services and remove volumes (clean slate)
+docker compose --profile kafka-pg down -v
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="RabbitMQ + MySQL" icon="rabbit" href="/examples/rabbitmq-mysql">
+    Try a different messaging/database combination
+  </Card>
+  <Card title="PGMQ Setup" icon="server" href="/examples/pgmq">
+    Use PostgreSQL for both messaging and storage
+  </Card>
+  <Card title="Production Deployment" icon="rocket" href="/deployment/production">
+    Deploy Lemline to production
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/observability/monitoring">
+    Set up metrics and monitoring
+  </Card>
+</CardGroup>

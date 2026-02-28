@@ -1,0 +1,350 @@
+---
+title: Docker Deployment
+description: Deploy Lemline using Docker containers
+---
+
+Lemline provides a production-ready Dockerfile that builds a JVM-based runtime with optimal layer caching and security best practices.
+
+## Dockerfile Overview
+
+The official Dockerfile uses a multi-stage build:
+
+```dockerfile
+# Build stage
+FROM eclipse-temurin:17-jdk-jammy AS build
+WORKDIR /workspace
+
+# Copy Gradle wrappers and build config for layer caching
+COPY gradlew gradlew.bat settings.gradle.kts gradle.properties ./
+COPY gradle ./gradle
+COPY buildSrc ./buildSrc
+
+# Copy all required modules
+COPY lemline-common ./lemline-common
+COPY lemline-core ./lemline-core
+COPY lemline-messages-proto ./lemline-messages-proto
+# ... (other modules)
+COPY lemline-runner ./lemline-runner
+
+# Build with Gradle
+RUN ./gradlew --no-daemon --console=plain :lemline-runner:quarkusBuild
+
+# Runtime stage
+FROM eclipse-temurin:17-jre-jammy
+WORKDIR /app
+
+# Create non-root user
+RUN groupadd --system lemline && useradd --system --gid lemline --create-home lemline
+
+COPY --from=build /workspace/lemline-runner/build/quarkus-app /app/quarkus-app
+RUN chown -R lemline:lemline /app
+
+USER lemline
+
+ENTRYPOINT ["java", "-jar", "/app/quarkus-app/quarkus-run.jar"]
+CMD ["listen"]
+```
+
+## Building the Image
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/lemline/lemline.git
+    cd lemline
+    ```
+  </Step>
+
+  <Step title="Build the Docker image">
+    ```bash
+    docker build -t lemline-runner:latest -f lemline-runner/Dockerfile .
+    ```
+
+    This builds the image with default Gradle settings. For custom build parameters:
+
+    ```bash
+    docker build \
+      --build-arg GRADLE_MAX_HEAP=8g \
+      --build-arg GRADLE_MAX_WORKERS=12 \
+      -t lemline-runner:latest \
+      -f lemline-runner/Dockerfile .
+    ```
+  </Step>
+
+  <Step title="Verify the image">
+    ```bash
+    docker run --rm lemline-runner:latest --version
+    ```
+  </Step>
+</Steps>
+
+## Running with Docker
+
+### Basic Usage
+
+```bash
+docker run -d \
+  --name lemline-runner \
+  -e LEMLINE_DATABASE_POSTGRESQL_HOST=postgres \
+  -e LEMLINE_DATABASE_POSTGRESQL_PASSWORD=secret \
+  -e LEMLINE_MESSAGING_KAFKA_BROKERS=kafka:9092 \
+  lemline-runner:latest listen
+```
+
+### With Configuration File
+
+Mount a configuration file for more complex setups:
+
+```bash
+docker run -d \
+  --name lemline-runner \
+  -v $(pwd)/lemline.yaml:/config/lemline.yaml:ro \
+  -e QUARKUS_CONFIG_LOCATIONS=/config/lemline.yaml \
+  lemline-runner:latest listen
+```
+
+### With Metrics Port
+
+```bash
+docker run -d \
+  --name lemline-runner \
+  -p 9445:9445 \
+  -v $(pwd)/lemline.yaml:/config/lemline.yaml:ro \
+  lemline-runner:latest listen --metrics-port 9445
+```
+
+## Docker Compose
+
+For local development or simple deployments, use Docker Compose to manage all infrastructure services together.
+
+### Full Stack Example
+
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: lemline
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  lemline-runner:
+    image: lemline-runner:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      LEMLINE_DATABASE_POSTGRESQL_HOST: postgres
+      LEMLINE_DATABASE_POSTGRESQL_PASSWORD: postgres
+      LEMLINE_MESSAGING_KAFKA_BROKERS: kafka:29092
+      LEMLINE_DATABASE_MIGRATE_AT_START: true
+      LEMLINE_DATABASE_BASELINE_ON_MIGRATE: true
+    ports:
+      - "9445:9445"
+    command: ["listen", "--metrics-port", "9445"]
+
+volumes:
+  postgres_data:
+```
+
+<Steps>
+  <Step title="Start all services">
+    ```bash
+    docker compose up -d
+    ```
+  </Step>
+
+  <Step title="View logs">
+    ```bash
+    docker compose logs -f lemline-runner
+    ```
+  </Step>
+
+  <Step title="Stop services">
+    ```bash
+    docker compose down
+    ```
+  </Step>
+</Steps>
+
+### Multi-Profile Configuration
+
+The examples directory includes a comprehensive Docker Compose file with multiple profiles for testing different configurations:
+
+```bash
+# Kafka + PostgreSQL
+docker compose -f examples/docker-compose.yml --profile kafka-pg up -d
+
+# RabbitMQ + PostgreSQL
+docker compose -f examples/docker-compose.yml --profile rabbit-pg up -d
+
+# PGMQ (PostgreSQL for both DB and messaging)
+docker compose -f examples/docker-compose.yml --profile pgmq up -d
+
+# Kafka + MySQL
+docker compose -f examples/docker-compose.yml --profile kafka-mysql up -d
+```
+
+See `examples/README.md` for all available profiles and configurations.
+
+## Environment Variables
+
+### Database Configuration
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `LEMLINE_DATABASE_TYPE` | Database type (`postgresql`, `mysql`) | `postgresql` |
+| `LEMLINE_DATABASE_POSTGRESQL_HOST` | PostgreSQL hostname | `localhost` |
+| `LEMLINE_DATABASE_POSTGRESQL_PORT` | PostgreSQL port | `5432` |
+| `LEMLINE_DATABASE_POSTGRESQL_DATABASE` | Database name | `lemline` |
+| `LEMLINE_DATABASE_POSTGRESQL_USERNAME` | Database username | `postgres` |
+| `LEMLINE_DATABASE_POSTGRESQL_PASSWORD` | Database password | `postgres` |
+| `LEMLINE_DATABASE_MIGRATE_AT_START` | Run migrations on startup | `false` |
+| `LEMLINE_DATABASE_BASELINE_ON_MIGRATE` | Create schema history table | `false` |
+
+### Messaging Configuration
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `LEMLINE_MESSAGING_TYPE` | Messaging type (`kafka`, `rabbitmq`, `pgmq`) | `kafka` |
+| `LEMLINE_MESSAGING_KAFKA_BROKERS` | Kafka broker addresses | `localhost:9092` |
+| `LEMLINE_MESSAGING_RABBITMQ_HOST` | RabbitMQ hostname | `localhost` |
+| `LEMLINE_MESSAGING_RABBITMQ_PORT` | RabbitMQ port | `5672` |
+| `LEMLINE_MESSAGING_RABBITMQ_USERNAME` | RabbitMQ username | `guest` |
+| `LEMLINE_MESSAGING_RABBITMQ_PASSWORD` | RabbitMQ password | `guest` |
+
+### Application Configuration
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `QUARKUS_CONFIG_LOCATIONS` | Configuration file path | `application.yaml` |
+| `QUARKUS_PROFILE` | Active profile (`dev`, `prod`, `test`) | none |
+| `QUARKUS_LOG_LEVEL` | Log level | `INFO` |
+
+## Health Checks
+
+Lemline exposes health check endpoints via the metrics port:
+
+```yaml
+healthcheck:
+  test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9445"]
+  interval: 5s
+  timeout: 5s
+  retries: 20
+  start_period: 15s
+```
+
+Alternatively, use the HTTP health endpoints:
+
+```bash
+# Liveness
+curl http://localhost:9445/q/health/live
+
+# Readiness
+curl http://localhost:9445/q/health/ready
+```
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Non-root user">
+    The Dockerfile creates and uses a dedicated `lemline` user with no elevated privileges.
+  </Accordion>
+
+  <Accordion title="Secret management">
+    Never hardcode secrets in the Dockerfile or docker-compose.yml. Use:
+    - Docker secrets for Swarm deployments
+    - Environment variables from secure stores
+    - Mounted secret files with restricted permissions
+  </Accordion>
+
+  <Accordion title="Network isolation">
+    Use Docker networks to isolate Lemline runners from external access:
+    ```yaml
+    networks:
+      lemline-internal:
+        internal: true
+    ```
+  </Accordion>
+
+  <Accordion title="Read-only filesystem">
+    Mount configuration files as read-only:
+    ```bash
+    -v $(pwd)/lemline.yaml:/config/lemline.yaml:ro
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+### Container exits immediately
+
+Check logs for configuration errors:
+```bash
+docker logs lemline-runner
+```
+
+### Cannot connect to database
+
+Verify network connectivity:
+```bash
+docker exec lemline-runner nc -zv postgres 5432
+```
+
+### Cannot connect to Kafka
+
+Ensure using internal listener for container-to-container communication:
+```bash
+LEMLINE_MESSAGING_KAFKA_BROKERS=kafka:29092  # Internal listener
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Native Image" icon="bolt" href="/deployment/native-image">
+    Build native binaries for faster startup
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/deployment/kubernetes">
+    Deploy to Kubernetes
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Learn about configuration options
+  </Card>
+  <Card title="Horizontal Scaling" icon="arrows-split-up-and-left" href="/deployment/scaling">
+    Scale your deployment
+  </Card>
+</CardGroup>

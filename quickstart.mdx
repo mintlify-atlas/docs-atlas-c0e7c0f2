@@ -1,80 +1,383 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get up and running with Lemline in minutes
+icon: bolt
 ---
 
-## Get started in three steps
+This guide will get you up and running with Lemline in minutes. You'll set up the infrastructure, run your first workflow, and understand the basics of workflow orchestration.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, make sure you have:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+- **Java 17+** (for running the JAR)
+- **Docker & Docker Compose** (for local infrastructure)
+- **Git** (to clone the repository)
+
+<Info>
+For production deployments, you can use native binaries that don't require Java. See the [Installation](/installation) guide for details.
+</Info>
+
+## Step 1: Start Local Infrastructure
+
+Lemline requires a database and message broker. We'll use Docker Compose to start PostgreSQL and Kafka locally.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/lemline/lemline.git
+    cd lemline
+    ```
+  </Step>
+  
+  <Step title="Start infrastructure with Docker Compose">
+    ```bash
+    docker compose -f examples/docker-compose.yml --profile kafka-pg up -d
+    ```
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    This starts:
+    - **PostgreSQL** on port 5432
+    - **Kafka** on port 9092
+    - **Kafka UI** on port 8080 (optional, for monitoring)
+  </Step>
+  
+  <Step title="Verify services are running">
+    ```bash
+    docker compose -f examples/docker-compose.yml ps
+    ```
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+    All services should show as "healthy" or "running".
+  </Step>
+</Steps>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+The example configuration uses default credentials. For production, always use secure credentials and environment variables.
 </Note>
+
+## Step 2: Build and Run Lemline
+
+<Steps>
+  <Step title="Build the application">
+    ```bash
+    ./gradlew :lemline-runner:build -x test
+    ```
+    
+    This creates a runnable JAR in `lemline-runner/build/quarkus-app/`.
+  </Step>
+  
+  <Step title="Run the Lemline runner">
+    ```bash
+    QUARKUS_CONFIG_LOCATIONS=examples/lemline-kafka-pg.yaml \
+      java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen --info
+    ```
+    
+    The `listen` command starts the worker, which:
+    - Connects to PostgreSQL and applies database migrations
+    - Connects to Kafka and subscribes to workflow topics
+    - Begins listening for workflow triggers
+  </Step>
+  
+  <Step title="Verify the runner started successfully">
+    You should see log output indicating:
+    ```
+    Lemline runner started
+    Connected to PostgreSQL: lemline
+    Connected to Kafka: localhost:9092
+    Listening for workflows on topic: lemline-commands
+    ```
+  </Step>
+</Steps>
+
+## Step 3: Create Your First Workflow
+
+Let's create a simple workflow that demonstrates HTTP calls and error handling.
+
+<CodeGroup>
+```yaml hello-workflow.yaml
+document:
+  dsl: '1.0.0'
+  namespace: tutorial
+  name: hello-workflow
+  version: '0.1.0'
+do:
+  - setGreeting:
+      set:
+        message: Hello, Lemline!
+  - logMessage:
+      call: https://raw.githubusercontent.com/serverlessworkflow/catalog/main/functions/log/1.0.0/function.yaml
+      with:
+        message: ${ .message }
+```
+
+```yaml http-example.yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: call-http-example
+  version: '0.1.0'
+do:
+  - getPet:
+      call: http
+      with:
+        method: get
+        endpoint: ${ "https://petstore.swagger.io/v2/pet/\(.petId)" }
+        headers:
+          content-type: application/json
+```
+
+```yaml retry-example.yaml
+document:
+  dsl: '1.0.0'
+  namespace: default
+  name: retry-example
+  version: '0.1.0'
+do:
+  - tryGetPet:
+      try:
+        - getPet:
+            call: http
+            with:
+              method: get
+              endpoint: https://petstore.swagger.io/v2/pet/{petId}
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+            status: 503
+        retry:
+          delay:
+            seconds: 3
+          backoff:
+            exponential: {}
+          limit:
+            attempt:
+              count: 5
+```
+</CodeGroup>
+
+## Step 4: Deploy and Trigger a Workflow
+
+Now let's deploy and trigger the workflow using the Lemline CLI.
+
+<Steps>
+  <Step title="Deploy the workflow definition">
+    ```bash
+    ./lemline-runner definition create --file hello-workflow.yaml
+    ```
+    
+    This registers the workflow definition in Lemline's database.
+  </Step>
+  
+  <Step title="Start a workflow instance">
+    ```bash
+    ./lemline-runner instance start \
+      --namespace tutorial \
+      --name hello-workflow \
+      --version 0.1.0
+    ```
+    
+    You should receive a workflow instance ID:
+    ```
+    Workflow instance started: wf_01J9X7K3M2N5P6Q8R9S0T1V2W3
+    ```
+  </Step>
+  
+  <Step title="Check workflow status">
+    ```bash
+    ./lemline-runner instance get --id wf_01J9X7K3M2N5P6Q8R9S0T1V2W3
+    ```
+    
+    This shows the current state, completed tasks, and any outputs.
+  </Step>
+</Steps>
+
+<Tip>
+Use `--watch` to monitor workflow execution in real-time:
+```bash
+./lemline-runner instance start --namespace tutorial --name hello-workflow --version 0.1.0 --watch
+```
+</Tip>
+
+## Understanding the Workflow
+
+Let's break down what happened in the hello workflow:
+
+<Steps>
+  <Step title="Set Task">
+    ```yaml
+    - setGreeting:
+        set:
+          message: Hello, Lemline!
+    ```
+    
+    The `set` task adds data to the workflow context. This is similar to variable assignment.
+  </Step>
+  
+  <Step title="Call Task">
+    ```yaml
+    - logMessage:
+        call: https://raw.githubusercontent.com/serverlessworkflow/catalog/main/functions/log/1.0.0/function.yaml
+        with:
+          message: ${ .message }
+    ```
+    
+    The `call` task invokes an external function (in this case, a logging function) with the message from the context.
+  </Step>
+  
+  <Step title="Expression Evaluation">
+    The `${ .message }` expression retrieves the value of `message` from the workflow context, set in the previous task.
+  </Step>
+</Steps>
+
+## Advanced Example: Parallel Execution
+
+Lemline supports parallel task execution using the `fork` task:
+
+```yaml fork-example.yaml
+document:
+  dsl: '1.0.0'
+  namespace: test
+  name: fork-example
+  version: '0.1.0'
+do:
+  - raiseAlarm:
+      fork:
+        compete: true
+        branches:
+          - callNurse:
+              call: http
+              with:
+                method: put
+                endpoint: https://fake-hospital.com/api/v3/alert/nurses
+                body:
+                  patientId: ${ .patient.fullName }
+                  room: ${ .room.number }
+          - callDoctor:
+              call: http
+              with:
+                method: put
+                endpoint: https://fake-hospital.com/api/v3/alert/doctor
+                body:
+                  patientId: ${ .patient.fullName }
+                  room: ${ .room.number }
+```
+
+<Info>
+With `compete: true`, the fork completes as soon as the first branch finishes. Without it, all branches must complete.
+</Info>
+
+## Configuration Overview
+
+The example configuration (`examples/lemline-kafka-pg.yaml`) is minimal:
+
+```yaml
+lemline:
+  database:
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+
+  messaging:
+    kafka:
+      brokers: localhost:9092
+```
+
+<CardGroup cols={2}>
+  <Card title="Database Configuration" icon="database" href="/configuration/database">
+    Learn about database configuration, migrations, and supported databases
+  </Card>
+  
+  <Card title="Messaging Configuration" icon="message" href="/configuration/messaging">
+    Configure Kafka, RabbitMQ, or PGMQ for workflow messaging
+  </Card>
+</CardGroup>
+
+## Monitoring Your Workflows
+
+<Steps>
+  <Step title="View metrics endpoint">
+    Lemline exposes Prometheus-compatible metrics on port 9090 by default:
+    ```bash
+    curl http://localhost:9090/q/metrics
+    ```
+  </Step>
+  
+  <Step title="Check health status">
+    ```bash
+    curl http://localhost:9090/q/health
+    ```
+  </Step>
+  
+  <Step title="Enable lifecycle events (optional)">
+    Add to your configuration to publish workflow lifecycle events:
+    ```yaml
+    lemline:
+      messaging:
+        lifecycleevents:
+          producer:
+            enabled: true
+    ```
+    
+    Events include: `workflow.started`, `workflow.completed`, `task.started`, `task.completed`, etc.
+  </Step>
+</Steps>
+
+## Scaling Your Workers
+
+Lemline workers are completely stateless. To scale horizontally, simply start more instances:
+
+```bash
+# Terminal 1
+QUARKUS_CONFIG_LOCATIONS=examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+
+# Terminal 2
+QUARKUS_CONFIG_LOCATIONS=examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+
+# Terminal 3
+QUARKUS_CONFIG_LOCATIONS=examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+```
+
+All workers share the same Kafka consumer group and database, automatically distributing workflow execution.
+
+<Warning>
+Ensure your message broker and database can handle the increased connection count when scaling.
+</Warning>
+
+## Cleanup
+
+When you're done experimenting:
+
+```bash
+# Stop the Lemline runner (Ctrl+C)
+
+# Stop and remove infrastructure
+docker compose -f examples/docker-compose.yml --profile kafka-pg down -v
+```
+
+The `-v` flag removes volumes, giving you a clean slate for next time.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Learn about different installation methods including native binaries and Docker
+  </Card>
+  
+  <Card title="Workflow Tasks" icon="code" href="/tasks/overview">
+    Explore all available task types: call, fork, listen, emit, switch, and more
+  </Card>
+  
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Complete reference for all Lemline CLI commands
+  </Card>
+  
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Deep dive into configuration options for production deployments
+  </Card>
+</CardGroup>

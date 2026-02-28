@@ -1,0 +1,402 @@
+---
+title: Analytics Configuration
+description: Configure lifecycle event analytics ingestion for workflow observability.
+keywords: ['analytics', 'lifecycle events', 'cloudevents', 'observability', 'postgresql']
+---
+
+Lemline can ingest workflow lifecycle CloudEvents into a dedicated analytics database for observability and monitoring.
+
+## Overview
+
+The analytics system:
+
+- Consumes lifecycle events from the `lifecycleevents` broker destination
+- Stores events in a dedicated PostgreSQL database
+- Provides deduplication based on CloudEvent identity (`source`, `id`)
+- Supports the gateway's workflow watch/streaming APIs
+- Works with Kafka, RabbitMQ, and PGMQ messaging backends
+
+<Info>
+  Analytics ingestion is optional but required for the gateway's `WatchWorkflow` API.
+</Info>
+
+## Basic Configuration
+
+Enable analytics ingestion:
+
+```yaml
+lemline:
+  analytics:
+    consumer:
+      enabled: true
+      concurrency: 64
+    migrate-at-start: true
+    baseline-on-migrate: false
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline_analytics
+      username: postgres
+      password: postgres
+      schema: public
+```
+
+## Consumer Configuration
+
+<ParamField path="lemline.analytics.consumer.enabled" type="boolean" default="false">
+  Enable lifecycle event analytics consumer
+</ParamField>
+
+<ParamField path="lemline.analytics.consumer.concurrency" type="number" default="64">
+  Number of concurrent event processors
+</ParamField>
+
+```yaml
+lemline:
+  analytics:
+    consumer:
+      enabled: true
+      concurrency: 128
+```
+
+<Tip>
+  Increase concurrency for high-throughput workloads. Start with 64 and adjust based on throughput metrics.
+</Tip>
+
+## Database Configuration
+
+### PostgreSQL
+
+Configure the analytics PostgreSQL database:
+
+<ParamField path="lemline.analytics.type" type="string" default="postgresql">
+  Analytics database type. Currently only `postgresql` is supported.
+</ParamField>
+
+<ParamField path="lemline.analytics.postgresql.host" type="string" required default="localhost">
+  PostgreSQL server hostname or IP address
+</ParamField>
+
+<ParamField path="lemline.analytics.postgresql.port" type="number" required default="5432">
+  PostgreSQL server port
+</ParamField>
+
+<ParamField path="lemline.analytics.postgresql.database" type="string" required default="lemline_analytics">
+  Database name for analytics tables
+</ParamField>
+
+<ParamField path="lemline.analytics.postgresql.username" type="string" required default="postgres">
+  Database username
+</ParamField>
+
+<ParamField path="lemline.analytics.postgresql.password" type="string" required default="postgres">
+  Database password. Use environment variables for security.
+</ParamField>
+
+<ParamField path="lemline.analytics.postgresql.schema" type="string" default="public">
+  PostgreSQL schema for analytics tables
+</ParamField>
+
+<Warning>
+  Always set passwords via environment variables: `${LEMLINE_ANALYTICS_PASSWORD}`
+</Warning>
+
+### Example
+
+```yaml
+lemline:
+  analytics:
+    type: postgresql
+    postgresql:
+      host: analytics-db.example.com
+      port: 5432
+      database: workflow_analytics
+      username: analytics_user
+      password: ${LEMLINE_ANALYTICS_PASSWORD}
+      schema: events
+```
+
+## Migration Configuration
+
+<ParamField path="lemline.analytics.migrate-at-start" type="boolean" default="false">
+  Apply database migrations automatically on startup
+</ParamField>
+
+<ParamField path="lemline.analytics.baseline-on-migrate" type="boolean" default="false">
+  Create the schema history table if it doesn't exist
+</ParamField>
+
+```yaml
+lemline:
+  analytics:
+    migrate-at-start: true
+    baseline-on-migrate: true
+```
+
+<Info>
+  Enable `baseline-on-migrate` for existing databases to create the Flyway history table.
+</Info>
+
+## Event Processing Behavior
+
+### ACK-after-commit
+
+Events are acknowledged only after successful database commit:
+
+<Steps>
+  <Step title="Consume Event">
+    Read lifecycle CloudEvent from broker
+  </Step>
+  <Step title="Insert Event">
+    Insert event into analytics database
+  </Step>
+  <Step title="Commit Transaction">
+    Commit database transaction
+  </Step>
+  <Step title="Acknowledge">
+    Acknowledge message to broker
+  </Step>
+</Steps>
+
+<Tip>
+  This ensures at-least-once delivery. Failed inserts will be retried.
+</Tip>
+
+### Deduplication
+
+Events are deduplicated using CloudEvent identity:
+
+- Composite key: `source` + `id`
+- Duplicate inserts are ignored (constraint violation)
+- Redelivered messages are safely idempotent
+
+```sql
+CREATE UNIQUE INDEX idx_lifecycle_events_source_id 
+  ON lifecycle_events (source, id);
+```
+
+## Separate Analytics Database
+
+Use a dedicated database for analytics:
+
+```yaml
+lemline:
+  # Main workflow database
+  database:
+    type: postgresql
+    postgresql:
+      host: workflow-db.example.com
+      database: lemline
+      username: lemline_user
+      password: ${LEMLINE_DB_PASSWORD}
+
+  # Separate analytics database
+  analytics:
+    consumer:
+      enabled: true
+    type: postgresql
+    postgresql:
+      host: analytics-db.example.com
+      database: lemline_analytics
+      username: analytics_user
+      password: ${LEMLINE_ANALYTICS_PASSWORD}
+```
+
+<Note>
+  Using separate databases allows independent scaling and backup strategies.
+</Note>
+
+## Gateway Integration
+
+The gateway requires analytics configuration for watch/streaming:
+
+```yaml
+lemline:
+  analytics:
+    consumer:
+      enabled: true
+      concurrency: 64
+    migrate-at-start: true
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline_analytics
+      username: postgres
+      password: postgres
+
+  gateway:
+    enabled: true
+    watch:
+      poll-interval-ms: 250
+      batch-size: 256
+```
+
+<Info>
+  The gateway reads from the analytics database for `WatchWorkflow` API calls.
+</Info>
+
+## Complete Example
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    migrate-at-start: true
+    postgresql:
+      host: ${LEMLINE_DB_HOST:localhost}
+      port: 5432
+      database: lemline
+      username: ${LEMLINE_DB_USER:postgres}
+      password: ${LEMLINE_DB_PASSWORD:postgres}
+
+  messaging:
+    type: kafka
+    kafka:
+      brokers: ${KAFKA_BROKERS:localhost:9092}
+
+  analytics:
+    consumer:
+      enabled: true
+      concurrency: 128
+    migrate-at-start: true
+    baseline-on-migrate: false
+    type: postgresql
+    postgresql:
+      host: ${LEMLINE_ANALYTICS_HOST:localhost}
+      port: 5432
+      database: lemline_analytics
+      username: ${LEMLINE_ANALYTICS_USER:postgres}
+      password: ${LEMLINE_ANALYTICS_PASSWORD:postgres}
+      schema: public
+```
+
+## Environment-Specific Configuration
+
+Use Quarkus profiles for different environments:
+
+```yaml
+lemline:
+  analytics:
+    consumer:
+      enabled: true
+      concurrency: 64
+    postgresql:
+      host: localhost
+      database: lemline_analytics_dev
+      username: postgres
+      password: dev-password
+
+'%prod':
+  lemline:
+    analytics:
+      consumer:
+        concurrency: 256
+      postgresql:
+        host: ${LEMLINE_ANALYTICS_HOST}
+        database: lemline_analytics_prod
+        username: ${LEMLINE_ANALYTICS_USER}
+        password: ${LEMLINE_ANALYTICS_PASSWORD}
+        schema: production
+```
+
+## Schema Structure
+
+The analytics database stores lifecycle events with:
+
+- `id`: Event unique identifier
+- `source`: Event source (workflow instance)
+- `type`: CloudEvent type (e.g., `workflow.started`)
+- `time`: Event timestamp
+- `data`: Event payload (JSON)
+- `subject`: Workflow subject/name
+- `datacontenttype`: Content type
+- `specversion`: CloudEvents specification version
+
+<Note>
+  Migrations create indexes on `source`, `id`, and `time` for efficient queries.
+</Note>
+
+## Performance Tuning
+
+### High-Throughput Scenarios
+
+For high event volumes:
+
+```yaml
+lemline:
+  analytics:
+    consumer:
+      concurrency: 256  # Increase concurrent processors
+    postgresql:
+      # Use connection pooling
+      max-connections: 100
+```
+
+### Low-Latency Requirements
+
+For low-latency watch queries:
+
+```yaml
+lemline:
+  gateway:
+    watch:
+      poll-interval-ms: 100  # Decrease poll interval
+      batch-size: 512        # Increase batch size
+```
+
+<Tip>
+  Monitor database CPU and I/O when tuning concurrency. Start conservative and increase gradually.
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Events not appearing in analytics">
+    - Verify analytics consumer is enabled
+    - Check messaging configuration is correct
+    - Review application logs for consumer errors
+    - Ensure lifecycle events are being published
+    - Verify database connection is successful
+  </Accordion>
+  
+  <Accordion title="Duplicate event errors">
+    - This is normal for redelivered messages
+    - Deduplication prevents duplicates in database
+    - Check for unique constraint violations in logs
+    - Verify CloudEvent IDs are properly generated
+  </Accordion>
+  
+  <Accordion title="High consumer lag">
+    - Increase consumer concurrency
+    - Check database performance and indexing
+    - Verify network latency between broker and database
+    - Consider scaling database resources
+    - Monitor database connection pool exhaustion
+  </Accordion>
+  
+  <Accordion title="Migration failures">
+    - Check database user has DDL permissions
+    - Ensure schema exists (or use default `public`)
+    - Review Flyway migration logs
+    - For existing databases, enable `baseline-on-migrate`
+  </Accordion>
+  
+  <Accordion title="Gateway watch not streaming events">
+    - Verify analytics database configuration
+    - Check analytics migrations are applied
+    - Ensure events exist in analytics database
+    - Review gateway logs for database errors
+    - Verify workflow instance ID in watch request
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<Columns cols={2}>
+  <Card title="Gateway Configuration" icon="network" href="/configuration/gateway">
+    Configure the gRPC gateway to use analytics streaming
+  </Card>
+  <Card title="Observability" icon="activity" href="/observability/overview">
+    Learn about monitoring and observability features
+  </Card>
+</Columns>

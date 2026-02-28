@@ -1,0 +1,537 @@
+---
+title: For Task
+description: Iterate over collections and execute tasks for each item
+---
+
+The For task enables iteration over arrays or collections, executing a block of tasks for each item.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: process-items
+  version: '1.0.0'
+do:
+  - processAllItems:
+      for:
+        in: "${ .items }"  # Array to iterate
+        each: item          # Variable name for current item
+        at: index           # Variable name for current index
+      do:
+        - processItem:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/process
+              body:
+                item: "${ $item }"
+                index: "${ $index }"
+```
+
+## How It Works
+
+1. The `in` expression evaluates to an array
+2. For each element, the `do` block executes
+3. Current item is accessible via the variable specified in `each` (default: `$item`)
+4. Current index is accessible via the variable specified in `at` (default: `$index`)
+5. The output of each iteration becomes the input for the next
+6. Final output is from the last iteration
+
+```yaml
+for:
+  in: "${ [1, 2, 3] }"
+  each: number
+do:
+  - double:
+      set:
+        result: "${ $number * 2 }"
+# Iterations:
+# 1: $number=1, result=2
+# 2: $number=2, result=4
+# 3: $number=3, result=6
+# Final output: { "result": 6 }
+```
+
+## Complete Examples
+
+### Processing Order Items
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: process-order-items
+  version: '1.0.0'
+do:
+  - initializeProcessing:
+      set:
+        processedItems: []
+        totalValue: 0
+  
+  - processEachItem:
+      for:
+        in: "${ .order.items }"
+        each: item
+        at: itemIndex
+      do:
+        - validateItem:
+            call: http
+            with:
+              method: post
+              endpoint: https://inventory.example.com/api/validate
+              body:
+                sku: "${ $item.sku }"
+                quantity: "${ $item.quantity }"
+        
+        - calculateItemTotal:
+            set:
+              itemTotal: "${ $item.price * $item.quantity }"
+        
+        - addToProcessed:
+            set:
+              processedItems: "${ .processedItems + [{ 
+                sku: $item.sku, 
+                quantity: $item.quantity,
+                total: .itemTotal,
+                validated: .body.valid
+              }] }"
+              totalValue: "${ .totalValue + .itemTotal }"
+  
+  - finalizeOrder:
+      set:
+        order:
+          items: "${ .processedItems }"
+          total: "${ .totalValue }"
+          itemCount: "${ length(.processedItems) }"
+```
+
+### Batch API Calls
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: batch-user-updates
+  version: '1.0.0'
+do:
+  - getUsers:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/users
+      output:
+        as: "${ .body.users }"
+  
+  - updateEachUser:
+      for:
+        in: "${ . }"
+        each: user
+        at: userIndex
+      do:
+        - enrichUserData:
+            call: http
+            with:
+              method: get
+              endpoint: https://enrichment.example.com/api/enrich/{userId}
+              body:
+                userId: "${ $user.id }"
+        
+        - updateUser:
+            try:
+              - callUpdateAPI:
+                  call: http
+                  with:
+                    method: put
+                    endpoint: https://api.example.com/users/{userId}
+                    body:
+                      user: "${ $user }"
+                      enrichment: "${ .body }"
+                      updatedAt: "${ now() }"
+            catch:
+              errors:
+                with:
+                  type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+              retry:
+                delay:
+                  seconds: 2
+                backoff:
+                  exponential: {}
+                limit:
+                  attempt:
+                    count: 3
+        
+        - logProgress:
+            call: http
+            with:
+              method: post
+              endpoint: https://logging.example.com/api/log
+              body:
+                message: "Updated user ${ $userIndex + 1 } of ${ length($workflow.input) }"
+```
+
+### Conditional Iteration
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: conditional-iteration
+  version: '1.0.0'
+do:
+  - processActiveUsers:
+      for:
+        in: "${ .users }"
+        each: user
+        while: "${ $user.status == 'active' }"  # Stop when inactive user found
+      do:
+        - sendNotification:
+            call: http
+            with:
+              method: post
+              endpoint: https://notifications.example.com/api/send
+              body:
+                userId: "${ $user.id }"
+                template: active_user_update
+        
+        - trackNotification:
+            set:
+              lastNotifiedUserId: "${ $user.id }"
+```
+
+### Aggregating Results
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: aggregate-metrics
+  version: '1.0.0'
+do:
+  - initializeMetrics:
+      set:
+        totalSales: 0
+        totalOrders: 0
+        topProducts: []
+  
+  - aggregateByRegion:
+      for:
+        in: "${ .regions }"
+        each: region
+      do:
+        - getRegionMetrics:
+            call: http
+            with:
+              method: get
+              endpoint: https://analytics.example.com/api/regions/{regionId}/metrics
+        
+        - updateTotals:
+            set:
+              totalSales: "${ .totalSales + .body.sales }"
+              totalOrders: "${ .totalOrders + .body.orderCount }"
+              topProducts: "${ .topProducts + .body.topProducts }"
+  
+  - calculateFinalMetrics:
+      set:
+        metrics:
+          totalSales: "${ .totalSales }"
+          totalOrders: "${ .totalOrders }"
+          averageOrderValue: "${ .totalSales / .totalOrders }"
+          uniqueTopProducts: "${ .topProducts | unique | length }"
+```
+
+### Nested Iteration
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: nested-iteration
+  version: '1.0.0'
+do:
+  - processDepartments:
+      for:
+        in: "${ .departments }"
+        each: department
+      do:
+        - initializeDepartmentResults:
+            set:
+              departmentResults: []
+        
+        - processEmployees:
+            for:
+              in: "${ $department.employees }"
+              each: employee
+            do:
+              - processEmployee:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://hr.example.com/api/process
+                    body:
+                      employeeId: "${ $employee.id }"
+                      department: "${ $department.name }"
+              
+              - addToResults:
+                  set:
+                    departmentResults: "${ .departmentResults + [.body] }"
+        
+        - summarizeDepartment:
+            set:
+              summary:
+                department: "${ $department.name }"
+                employeeCount: "${ length(.departmentResults) }"
+                results: "${ .departmentResults }"
+```
+
+## Configuration
+
+### for (required)
+
+Defines iteration parameters:
+
+```yaml
+for:
+  in: "${ expression }"   # Required: expression evaluating to array
+  each: itemName          # Optional: variable name for current item (default: 'item')
+  at: indexName           # Optional: variable name for index (default: 'index')
+```
+
+### in (required)
+
+Expression that must evaluate to an array:
+
+```yaml
+for:
+  in: "${ .items }"                    # From input
+  in: "${ [1, 2, 3, 4, 5] }"          # Literal array
+  in: "${ range(1, 10) }"              # Generated array
+  in: "${ .data | map(.id) }"         # Transformed array
+```
+
+### each (optional)
+
+Variable name for current item (default: `item`):
+
+```yaml
+for:
+  in: "${ .products }"
+  each: product  # Access with $product in expressions
+do:
+  - processProduct:
+      set:
+        name: "${ $product.name }"
+```
+
+### at (optional)
+
+Variable name for current index (default: `index`):
+
+```yaml
+for:
+  in: "${ .items }"
+  each: item
+  at: position  # Access with $position in expressions
+do:
+  - logPosition:
+      set:
+        message: "Processing item ${ $position + 1 }"
+```
+
+### while (optional)
+
+Condition to continue iteration:
+
+```yaml
+for:
+  in: "${ .items }"
+  while: "${ $item.valid == true }"  # Stop at first invalid item
+do:
+  - process:
+      # ...
+```
+
+### do (required)
+
+Tasks to execute for each item:
+
+```yaml
+for:
+  in: "${ .items }"
+do:
+  - step1:
+      # Has access to $item and $index
+  - step2:
+      # Sequential execution for each iteration
+```
+
+## Data Flow
+
+Each iteration receives output from previous iteration:
+
+```yaml
+- accumulate:
+    for:
+      in: "${ [1, 2, 3] }"
+      each: number
+    do:
+      - add:
+          set:
+            sum: "${ (.sum || 0) + $number }"
+# Iteration 1: sum = 1
+# Iteration 2: sum = 3 (1 + 2)
+# Iteration 3: sum = 6 (3 + 3)
+# Final output: { "sum": 6 }
+```
+
+## Early Exit
+
+Use `then: exit` to stop iteration:
+
+```yaml
+for:
+  in: "${ .items }"
+do:
+  - checkItem:
+      if: "${ $item.error == true }"
+      then: exit  # Stop iteration immediately
+  - processItem:
+      # Only reached if no error
+```
+
+## Best Practices
+
+1. **Initialize accumulator variables** - Set initial values before the loop
+2. **Handle empty arrays** - Check array length before iterating
+3. **Use meaningful variable names** - Make `each` and `at` names descriptive
+4. **Avoid side effects** - Keep iterations independent when possible
+5. **Consider performance** - Large arrays may need batch processing
+6. **Add error handling** - Wrap risky operations in Try/Catch
+7. **Log progress** - Track iteration progress for long-running loops
+
+## Common Patterns
+
+### Map Pattern (Transform Each Item)
+
+```yaml
+for:
+  in: "${ .items }"
+  each: item
+do:
+  - transform:
+      set:
+        transformed: "${ (.transformed || []) + [{ id: $item.id, value: $item.value * 2 }] }"
+```
+
+### Filter Pattern
+
+```yaml
+for:
+  in: "${ .items }"
+  each: item
+do:
+  - filterItem:
+      if: "${ $item.status == 'active' }"
+      set:
+        filtered: "${ (.filtered || []) + [$item] }"
+```
+
+### Reduce Pattern (Accumulate)
+
+```yaml
+for:
+  in: "${ .numbers }"
+  each: num
+do:
+  - accumulate:
+      set:
+        total: "${ (.total || 0) + $num }"
+```
+
+### Index-Based Processing
+
+```yaml
+for:
+  in: "${ .items }"
+  at: idx
+do:
+  - processEveryOther:
+      if: "${ $idx % 2 == 0 }"
+      call: http
+      # Process only even-indexed items
+```
+
+## Error Handling
+
+Handle errors within iterations:
+
+```yaml
+for:
+  in: "${ .items }"
+  each: item
+do:
+  - safeProcess:
+      try:
+        - processItem:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/process
+              body: "${ $item }"
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: itemError
+        do:
+          - logError:
+              set:
+                errors: "${ (.errors || []) + [{ item: $item, error: $itemError }] }"
+```
+
+## Performance Considerations
+
+### Large Arrays
+
+For large arrays, consider batch processing:
+
+```yaml
+# Instead of iterating 10,000 items:
+for:
+  in: "${ .items | batch(100) }"  # Process in batches
+  each: batch
+do:
+  - processBatch:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/batch
+        body: "${ $batch }"
+```
+
+### Parallel Processing
+
+Use Fork for parallel iteration:
+
+```yaml
+# Sequential (one at a time)
+for:
+  in: "${ .items }"
+do:
+  - process:
+      call: http
+      # ...
+
+# Parallel (all at once)
+fork:
+  branches:
+    # Create branches dynamically
+```
+
+## Related Topics
+
+- [Do Task](/tasks/do) - Sequential execution
+- [Fork Task](/tasks/fork) - Parallel execution
+- [Switch Task](/tasks/switch) - Conditional branching
+- [Set Task](/tasks/set) - Data transformation

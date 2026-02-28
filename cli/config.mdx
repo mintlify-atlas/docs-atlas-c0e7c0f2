@@ -1,0 +1,500 @@
+---
+title: config
+description: Display and manage Lemline configuration
+---
+
+The `config` command displays and manages the Lemline runtime configuration.
+
+## Usage
+
+```bash
+lemline config <subcommand> [OPTIONS]
+```
+
+## Subcommands
+
+- `show` - Display current configuration
+- `create` - Create a new configuration file (interactive)
+
+---
+
+## config show
+
+Display the effective runtime configuration.
+
+### Usage
+
+```bash
+lemline config show [OPTIONS]
+```
+
+### Description
+
+Displays the merged configuration from:
+
+1. Configuration files (resolved in order)
+2. Environment variables
+3. Default values
+
+The output shows the actual configuration the runtime will use.
+
+### Options
+
+<ParamField path="-f, --format" type="enum" default="YAML">
+  Output format for the configuration.
+  
+  **Values**:
+  - `YAML` - Human-readable YAML format (default)
+  - `PROPERTIES` - Java properties format
+</ParamField>
+
+<ParamField path="-a, --all" type="flag" default="false">
+  Show all configuration properties, not just `lemline.*` properties.
+  
+  Includes Quarkus framework and system properties.
+</ParamField>
+
+## Examples
+
+### Display Configuration (YAML)
+
+```bash
+lemline config show
+```
+
+Output:
+
+```yaml
+# Configuration from /home/user/.lemline.yaml + default values.
+lemline:
+  database:
+    url: jdbc:postgresql://localhost:5432/lemline
+    username: lemline
+    password: "***"
+  messaging:
+    type: rabbitmq
+    host: localhost
+    port: 5672
+    username: guest
+    password: "***"
+  metrics:
+    enabled: true
+    port: 9090
+  gateway:
+    grpc:
+      port: 9080
+```
+
+### Display as Properties
+
+```bash
+lemline config show --format properties
+```
+
+Output:
+
+```properties
+# Configuration from /home/user/.lemline.yaml + default values.
+lemline.database.url=jdbc:postgresql://localhost:5432/lemline
+lemline.database.username=lemline
+lemline.database.password=***
+lemline.messaging.type=rabbitmq
+lemline.messaging.host=localhost
+lemline.messaging.port=5672
+lemline.metrics.enabled=true
+lemline.metrics.port=9090
+lemline.gateway.grpc.port=9080
+```
+
+### Display All Properties
+
+Include framework properties:
+
+```bash
+lemline config show --all
+```
+
+Output includes Quarkus and JVM properties:
+
+```yaml
+lemline:
+  database:
+    url: jdbc:postgresql://localhost:5432/lemline
+  # ... lemline config ...
+
+quarkus:
+  application:
+    name: lemline-runner
+  http:
+    port: 8080
+  datasource:
+    db-kind: postgresql
+
+java:
+  version: 17
+  vendor: Eclipse Adoptium
+```
+
+### Use Custom Config File
+
+```bash
+lemline --config /etc/lemline/prod.yaml config show
+```
+
+### Grep Specific Values
+
+```bash
+# Check database URL
+lemline config show | grep database.url
+
+# Check messaging config
+lemline config show --format properties | grep messaging
+```
+
+## Configuration Structure
+
+### Database Configuration
+
+```yaml
+lemline:
+  database:
+    url: jdbc:postgresql://localhost:5432/lemline
+    username: lemline
+    password: secret
+    pool:
+      max-size: 20
+      min-size: 5
+```
+
+### Messaging Configuration
+
+```yaml
+lemline:
+  messaging:
+    type: rabbitmq  # or kafka, memory
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    consumer:
+      concurrency: 10
+      prefetch: 100
+```
+
+### Metrics Configuration
+
+```yaml
+lemline:
+  metrics:
+    enabled: true
+    port: 9090
+    path: /q/metrics
+```
+
+### Gateway Configuration
+
+```yaml
+lemline:
+  gateway:
+    grpc:
+      port: 9080
+      tls:
+        enabled: true
+        cert: /etc/lemline/server.crt
+        key: /etc/lemline/server.key
+    auth:
+      enabled: true
+      type: jwt
+```
+
+### Logging Configuration
+
+```yaml
+lemline:
+  logging:
+    level: INFO
+    format: json  # or text
+    console:
+      enabled: true
+    file:
+      enabled: true
+      path: /var/log/lemline/lemline.log
+```
+
+## Configuration Sources
+
+Configuration is resolved from multiple sources in order:
+
+### 1. Configuration Files
+
+Resolved in order (first found wins):
+
+1. CLI argument: `--config=/path/to/config.yaml`
+2. Environment variable: `LEMLINE_CONFIG`
+3. Current directory: `.lemline.yaml`
+4. User config: `~/.config/lemline/config.yaml`
+5. Home directory: `~/.lemline.yaml`
+
+### 2. Environment Variables
+
+Override file configuration:
+
+```bash
+export LEMLINE_DATABASE_URL=jdbc:postgresql://prod-db:5432/lemline
+export LEMLINE_DATABASE_USERNAME=prod_user
+export LEMLINE_MESSAGING_HOST=rabbitmq.prod.example.com
+```
+
+Environment variables use uppercase with underscores:
+
+```
+lemline.database.url → LEMLINE_DATABASE_URL
+lemline.messaging.type → LEMLINE_MESSAGING_TYPE
+```
+
+### 3. System Properties
+
+Java system properties:
+
+```bash
+lemline -Dlemline.database.url=jdbc:postgresql://localhost/lemline listen
+```
+
+### 4. Default Values
+
+Built-in defaults for all properties.
+
+## Configuration Validation
+
+Validate configuration before starting:
+
+```bash
+# Show effective config
+lemline config show
+
+# Check specific values
+lemline config show | grep -E "(database|messaging)"
+
+# Verify with test
+lemline --config test.yaml listen --mock-config mocks.yaml
+```
+
+## Configuration Templates
+
+### Minimal Development Config
+
+```yaml .lemline.yaml
+lemline:
+  database:
+    url: jdbc:h2:mem:lemline
+  messaging:
+    type: memory
+```
+
+### Production Config
+
+```yaml /etc/lemline/production.yaml
+lemline:
+  database:
+    url: jdbc:postgresql://db.prod.example.com:5432/lemline
+    username: lemline
+    password: ${DB_PASSWORD}  # From environment
+    pool:
+      max-size: 50
+  
+  messaging:
+    type: rabbitmq
+    host: mq.prod.example.com
+    port: 5672
+    username: lemline
+    password: ${MQ_PASSWORD}
+    consumer:
+      concurrency: 20
+  
+  gateway:
+    grpc:
+      port: 9080
+      tls:
+        enabled: true
+        cert: /etc/lemline/certs/server.crt
+        key: /etc/lemline/certs/server.key
+    auth:
+      enabled: true
+      type: jwt
+      jwt:
+        issuer: https://auth.example.com
+        audience: lemline-api
+  
+  metrics:
+    enabled: true
+    port: 9090
+  
+  logging:
+    level: INFO
+    format: json
+```
+
+### High Availability Config
+
+```yaml
+lemline:
+  database:
+    url: jdbc:postgresql://db-primary.example.com:5432,db-replica.example.com:5432/lemline
+    username: lemline
+    password: ${DB_PASSWORD}
+    pool:
+      max-size: 100
+  
+  messaging:
+    type: rabbitmq
+    host: mq-cluster.example.com
+    port: 5672
+    username: lemline
+    password: ${MQ_PASSWORD}
+    consumer:
+      concurrency: 50
+      prefetch: 200
+```
+
+## Environment-Specific Configuration
+
+### Using Profiles
+
+Create environment-specific files:
+
+```
+config/
+  base.yaml          # Shared configuration
+  dev.yaml           # Development overrides
+  staging.yaml       # Staging overrides
+  production.yaml    # Production overrides
+```
+
+```yaml base.yaml
+lemline:
+  metrics:
+    enabled: true
+    port: 9090
+```
+
+```yaml production.yaml
+lemline:
+  database:
+    url: jdbc:postgresql://prod-db:5432/lemline
+  messaging:
+    type: rabbitmq
+    host: prod-mq.example.com
+```
+
+Use:
+
+```bash
+lemline --config config/production.yaml listen
+```
+
+## Secrets Management
+
+### Environment Variables
+
+```yaml
+lemline:
+  database:
+    password: ${DB_PASSWORD}
+  messaging:
+    password: ${MQ_PASSWORD}
+  gateway:
+    auth:
+      jwt:
+        secret: ${JWT_SECRET}
+```
+
+```bash
+export DB_PASSWORD=secret123
+export MQ_PASSWORD=mqsecret456
+export JWT_SECRET=jwtsecret789
+
+lemline listen
+```
+
+### Kubernetes Secrets
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lemline-secrets
+type: Opaque
+stringData:
+  DB_PASSWORD: secret123
+  MQ_PASSWORD: mqsecret456
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lemline
+spec:
+  template:
+    spec:
+      containers:
+      - name: lemline
+        image: lemline/lemline:latest
+        envFrom:
+        - secretRef:
+            name: lemline-secrets
+```
+
+### HashiCorp Vault
+
+```yaml
+lemline:
+  database:
+    password: ${vault:secret/data/lemline/database#password}
+```
+
+## Troubleshooting
+
+### Configuration Not Loading
+
+Check which file is being used:
+
+```bash
+lemline config show | head -1
+# Output: # Configuration from /home/user/.lemline.yaml + default values.
+```
+
+### Override Not Working
+
+Verify environment variable naming:
+
+```bash
+# Wrong
+export lemline.database.url=...
+
+# Correct
+export LEMLINE_DATABASE_URL=...
+
+# Verify
+echo $LEMLINE_DATABASE_URL
+```
+
+### Sensitive Data in Output
+
+Passwords are masked in output:
+
+```yaml
+lemline:
+  database:
+    password: "***"  # Actual value hidden
+```
+
+To see actual values (use carefully):
+
+```bash
+lemline config show --all | grep -v password
+```
+
+## See Also
+
+- [listen](/cli/listen) - Start the runtime (uses configuration)
+- [gateway](/cli/gateway) - Start the gateway (uses configuration)
+- [migrate](/cli/migrate) - Run migrations (uses database configuration)

@@ -1,0 +1,141 @@
+---
+title: Hello World
+description: Your first Lemline workflow
+icon: rocket
+---
+
+This guide walks you through creating your first Lemline workflow. You'll learn the basic structure of a workflow and see it run.
+
+## The Simplest Workflow
+
+Here's a minimal "Hello World" workflow that sets a greeting message and logs it:
+
+```yaml hello.yaml
+document:
+  dsl: '1.0.0'
+  namespace: tutorial
+  name: hello-workflow
+  version: '0.1.0'
+do:
+  - setGreeting:
+      set:
+        message: Hello, Lemline!
+  - logMessage:
+      call: https://raw.githubusercontent.com/serverlessworkflow/catalog/main/functions/log/1.0.0/function.yaml
+      with:
+        message: ${ .message }
+```
+
+## Understanding the Structure
+
+### Document Metadata
+
+Every workflow starts with document metadata:
+
+- **dsl**: The Serverless Workflow DSL version (`1.0.0`)
+- **namespace**: Groups related workflows (e.g., `tutorial`)
+- **name**: Unique identifier for this workflow
+- **version**: Semantic version of the workflow
+
+### Tasks
+
+The `do` section contains the tasks to execute:
+
+1. **setGreeting**: Creates a variable `message` with the value "Hello, Lemline!"
+2. **logMessage**: Calls a logging function from the catalog, passing the message
+
+### Expressions
+
+The expression `${ .message }` accesses the `message` variable set in the previous task. Lemline uses JQ-like expressions for data manipulation.
+
+## Running the Workflow
+
+<Steps>
+
+### Start Lemline
+
+If you haven't already, start Lemline with your chosen configuration:
+
+```bash
+# Using Kafka + PostgreSQL
+LEMLINE_CONFIG=./examples/lemline-kafka-pg.yaml \
+  java -jar lemline-runner.jar listen
+```
+
+### Install the Workflow
+
+Save the workflow to `hello.yaml` and install it:
+
+```bash
+lemline definition post -f hello.yaml
+```
+
+### Start an Instance
+
+Execute the workflow:
+
+```bash
+lemline instance start \
+  -n tutorial.hello-workflow \
+  -v 0.1.0
+```
+
+### Watch the Output
+
+Check the Lemline logs to see your greeting message.
+
+</Steps>
+
+## Sequential Execution
+
+Workflows execute tasks sequentially by default. Let's extend the example:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: tutorial
+  name: hello-workflow-extended
+  version: '0.1.0'
+do:
+  - setGreeting:
+      set:
+        greeting: Hello
+        name: Lemline
+  - combineMessage:
+      set:
+        message: ${ .greeting + ", " + .name + "!" }
+  - logMessage:
+      call: https://raw.githubusercontent.com/serverlessworkflow/catalog/main/functions/log/1.0.0/function.yaml
+      with:
+        message: ${ .message }
+```
+
+This workflow:
+1. Sets two variables: `greeting` and `name`
+2. Combines them into a `message`
+3. Logs the result
+
+## Key Takeaways
+
+- Workflows are defined in YAML with a document header and a `do` section
+- Tasks execute sequentially from top to bottom
+- Use `set` to create or modify variables
+- Use `call` to invoke external functions or APIs
+- Access variables with expressions like `${ .variableName }`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="HTTP Calls" icon="globe" href="/examples/http-calls">
+    Learn to call REST APIs
+  </Card>
+  <Card title="Error Handling" icon="shield-halved" href="/examples/error-handling">
+    Handle errors gracefully
+  </Card>
+  <Card title="Event Listeners" icon="signal" href="/examples/event-listeners">
+    React to external events
+  </Card>
+  <Card title="Parallel Execution" icon="code-branch" href="/examples/parallel-execution">
+    Run tasks concurrently
+  </Card>
+</CardGroup>

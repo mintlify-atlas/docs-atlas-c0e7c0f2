@@ -1,0 +1,495 @@
+---
+title: Error Handling
+description: Build resilient workflows with try-catch and retry mechanisms
+icon: shield-halved
+---
+
+Robust error handling is essential for production workflows. Lemline provides powerful constructs for catching errors, retrying operations, and implementing compensating transactions.
+
+## Basic Try-Catch
+
+The simplest error handling catches specific error types:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: default
+  name: try-catch
+  version: '0.1.0'
+do:
+  - tryGetPet:
+      try:
+        - getPet:
+            call: http
+            with:
+              method: get
+              endpoint: https://petstore.swagger.io/v2/pet/{petId}
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+            status: 404
+```
+
+<Note>
+If the error matches (communication error with 404 status), execution continues after the catch block. Unmatched errors propagate up.
+</Note>
+
+## Catching and Handling Errors
+
+Capture error details and take action:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: default
+  name: error-with-actions
+  version: '0.1.0'
+do:
+  - tryGetPet:
+      try:
+        - getPet:
+            call: http
+            with:
+              method: get
+              endpoint: https://petstore.swagger.io/v2/pet/{petId}
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+            status: 404
+        as: error
+        do:
+          - notifySupport:
+              emit:
+                event:
+                  with:
+                    source: https://petstore.swagger.io
+                    type: io.swagger.petstore.events.pets.not-found.v1
+                    data: ${ $error }
+          - setError:
+              set:
+                error: $error
+              export:
+                as: '$context + { error: $error }'
+  - buyPet:
+      if: $context.error == null
+      call: http
+      with:
+        method: put
+        endpoint: https://petstore.swagger.io/v2/pet/{petId}
+        body: ${ . + { status: "sold" } }
+```
+
+This workflow:
+1. Catches 404 errors and stores them in `$error`
+2. Emits an event to notify support
+3. Exports the error to the context
+4. Conditionally executes the next task only if no error occurred
+
+## Retry Mechanisms
+
+Retry transient failures automatically:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: default
+  name: try-catch-retry
+  version: '0.1.0'
+do:
+  - tryGetPet:
+      try:
+        - getPet:
+            call: http
+            with:
+              method: get
+              endpoint: https://petstore.swagger.io/v2/pet/{petId}
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+            status: 503
+        retry:
+          delay:
+            seconds: 3
+          backoff:
+            exponential: {}
+          limit:
+            attempt:
+              count: 5
+```
+
+**Retry behavior:**
+- Initial delay: 3 seconds
+- Backoff strategy: exponential (3s, 6s, 12s, 24s, 48s)
+- Maximum attempts: 5
+
+## Reusable Retry Policies
+
+Define retry policies once and reuse them:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: default
+  name: reusable-retry
+  version: '0.1.0'
+use:
+  retries:
+    default:
+      delay:
+        seconds: 3
+      backoff:
+        exponential: {}
+      limit:
+        attempt:
+          count: 5
+do:
+  - tryGetPet:
+      try:
+        - getPet:
+            call: http
+            with:
+              method: get
+              endpoint: https://petstore.swagger.io/v2/pet/{petId}
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+            status: 503
+        retry: default
+```
+
+## Conditional Retry
+
+Retry only when specific conditions are met:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: conditional-retry
+  version: '0.1.0'
+do:
+  - tryProcessPayment:
+      try:
+        - processPayment:
+            call: http
+            with:
+              method: post
+              endpoint: https://payments.example.com/api/process
+              body: ${ .paymentDetails }
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: paymentError
+        retry:
+          when: ${ $paymentError.status >= 500 or $paymentError.status == 429 }
+          delay:
+            seconds: 2
+          backoff:
+            exponential: {}
+          limit:
+            attempt:
+              count: 3
+```
+
+<Tip>
+This only retries for server errors (5xx) or rate limiting (429), not for client errors (4xx).
+</Tip>
+
+## Multiple Error Types
+
+Handle different error types separately:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: error-hierarchy
+  version: '0.1.0'
+do:
+  - tryApiOperation:
+      try:
+        - callApi:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/resource
+              body: ${ .requestData }
+      catch:
+        - errors:
+            with:
+              type: https://example.com/errors/api/validation
+          as: validationError
+          do:
+            - handleValidation:
+                set:
+                  errorType: "validation"
+                  errorDetails: ${ $validationError }
+        - errors:
+            with:
+              type: https://example.com/errors/api
+          as: apiError
+          do:
+            - handleGenericApiError:
+                set:
+                  errorType: "api"
+                  errorDetails: ${ $apiError }
+        - errors:
+            with:
+              type: https://example.com/errors
+          as: genericError
+          do:
+            - handleGenericError:
+                set:
+                  errorType: "generic"
+                  errorDetails: ${ $genericError }
+```
+
+<Note>
+Catch blocks are evaluated in order. The first matching block handles the error.
+</Note>
+
+## Compensating Transactions
+
+Clean up after partial failures:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: compensating-transaction
+  version: '0.1.0'
+do:
+  - processOrder:
+      try:
+        - reserveInventory:
+            call: http
+            with:
+              method: post
+              endpoint: https://inventory.example.com/api/reserve
+              body: ${ .orderItems }
+              output: inventoryReservation
+        - processPayment:
+            call: http
+            with:
+              method: post
+              endpoint: https://payments.example.com/api/charge
+              body: ${ .paymentDetails }
+      catch:
+        errors:
+          with:
+            type: https://example.com/errors/payment
+        as: paymentError
+        do:
+          - cancelReservation:
+              call: http
+              with:
+                method: post
+                endpoint: https://inventory.example.com/api/cancel-reservation
+                body: ${ .inventoryReservation.id }
+          - notifyCustomer:
+              call: http
+              with:
+                method: post
+                endpoint: https://notifications.example.com/api/send
+                body:
+                  customerId: ${ .customerId }
+                  message: "Payment failed: ${ $paymentError.message }"
+```
+
+This workflow:
+1. Reserves inventory
+2. Attempts payment
+3. If payment fails, **cancels the inventory reservation** (compensation)
+4. Notifies the customer
+
+## Timeout Handling
+
+Prevent workflows from hanging indefinitely:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: timeout-handling
+  version: '0.1.0'
+do:
+  - callWithTimeout:
+      try:
+        - longRunningOperation:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/long-process
+              body: ${ .processData }
+              timeout:
+                seconds: 30
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/timeout
+        as: timeoutError
+        do:
+          - handleTimeout:
+              set:
+                status: "timeout"
+                message: "Operation timed out after 30 seconds"
+              then: exit
+```
+
+## Comprehensive Error Handling
+
+Combine all patterns for production-grade resilience:
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: comprehensive-error-handling
+  version: '0.1.0'
+use:
+  retries:
+    transientFailure:
+      delay:
+        seconds: 2
+      backoff:
+        exponential: {}
+      limit:
+        attempt:
+          count: 3
+do:
+  - processOrderWithRetries:
+      try:
+        - validateOrder:
+            call: http
+            with:
+              method: post
+              endpoint: https://validation.example.com/api/orders/validate
+              body: ${ .order }
+              timeout:
+                seconds: 10
+        - reserveInventory:
+            try:
+              - reserveItems:
+                  call: http
+                  with:
+                    method: post
+                    endpoint: https://inventory.example.com/api/reserve
+                    body: ${ .order.items }
+                    output: inventoryReservation
+            catch:
+              errors:
+                with:
+                  type: https://example.com/errors/inventory/insufficient
+              as: inventoryError
+              do:
+                - notifyCustomer:
+                    call: http
+                    with:
+                      method: post
+                      endpoint: https://notifications.example.com/api/send
+                      body:
+                        customerId: ${ .order.customerId }
+                        message: "Some items in your order are out of stock"
+                then: exit
+        - processPayment:
+            call: http
+            with:
+              method: post
+              endpoint: https://payments.example.com/api/charge
+              body: ${ .order.payment }
+      catch:
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/validation
+          as: validationError
+          do:
+            - handleValidationError:
+                set:
+                  status: "rejected"
+                  reason: ${ $validationError.message }
+                then: exit
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/timeout
+          as: timeoutError
+          do:
+            - logTimeout:
+                call: http
+                with:
+                  method: post
+                  endpoint: https://logging.example.com/api/log
+                  body:
+                    level: "warning"
+                    message: "Operation timed out"
+                    data: ${ $timeoutError }
+            then: exit
+        - errors:
+            with:
+              type: https://example.com/errors/payment
+          as: paymentError
+          do:
+            - cancelReservation:
+                call: http
+                with:
+                  method: post
+                  endpoint: https://inventory.example.com/api/cancel-reservation
+                  body: ${ .inventoryReservation.id }
+            - notifyCustomer:
+                call: http
+                with:
+                  method: post
+                  endpoint: https://notifications.example.com/api/send
+                  body:
+                    customerId: ${ .order.customerId }
+                    message: "Payment failed: ${ $paymentError.message }"
+            then: exit
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+          as: communicationError
+          retry: transientFailure
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Categorize errors" icon="tag">
+    Distinguish between transient failures (retry), permanent failures (compensate), and business exceptions (handle gracefully)
+  </Card>
+  
+  <Card title="Use hierarchical types" icon="sitemap">
+    Organize error types hierarchically for flexible matching
+  </Card>
+  
+  <Card title="Isolate risky operations" icon="flask">
+    Wrap potentially failing operations in their own try-catch blocks
+  </Card>
+  
+  <Card title="Always compensate" icon="undo">
+    Clean up after partial successes when an error occurs
+  </Card>
+  
+  <Card title="Design for idempotency" icon="rotate">
+    Ensure operations can be safely retried without side effects
+  </Card>
+  
+  <Card title="Set appropriate timeouts" icon="clock">
+    Prevent indefinite hanging with reasonable timeout values
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="HTTP Calls" icon="globe" href="/examples/http-calls">
+    Learn HTTP integration patterns
+  </Card>
+  <Card title="Event Listeners" icon="signal" href="/examples/event-listeners">
+    Handle asynchronous events
+  </Card>
+</CardGroup>

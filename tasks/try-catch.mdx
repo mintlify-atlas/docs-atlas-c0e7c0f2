@@ -1,0 +1,572 @@
+---
+title: Try/Catch Task
+description: Handle errors and implement retry logic in workflows
+---
+
+The Try/Catch task provides comprehensive error handling and retry mechanisms, enabling workflows to gracefully handle failures and recover from transient errors.
+
+## Basic Usage
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: error-handling
+  version: '1.0.0'
+do:
+  - callExternalAPI:
+      try:
+        - makeAPICall:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/data
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: apiError
+        do:
+          - handleError:
+              set:
+                result:
+                  success: false
+                  error: "${ $apiError.title }"
+                  fallbackData: null
+```
+
+## How It Works
+
+1. Tasks in the `try` block execute normally
+2. If an error occurs, it's matched against `catch` filters
+3. If matched, retry logic or catch block executes
+4. If retry succeeds, workflow continues normally
+5. If all retries fail, catch `do` block executes
+
+## Complete Examples
+
+### Retry with Exponential Backoff
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: retry-pattern
+  version: '1.0.0'
+do:
+  - fetchDataWithRetry:
+      try:
+        - getData:
+            call: http
+            with:
+              method: get
+              endpoint: https://api.example.com/data
+              timeout:
+                after: PT10S
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+            status: 503  # Service Unavailable
+        retry:
+          delay:
+            seconds: 2
+          backoff:
+            exponential: {}
+          limit:
+            attempt:
+              count: 5
+          jitter:
+            from:
+              milliseconds: 100
+            to:
+              seconds: 1
+# Retry delays: ~2s, ~4s, ~8s, ~16s (with jitter)
+```
+
+### Multiple Error Handlers
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: multiple-handlers
+  version: '1.0.0'
+do:
+  - processOrder:
+      try:
+        - validateOrder:
+            call: http
+            with:
+              method: post
+              endpoint: https://validation.example.com/api/validate
+              body: "${ .order }"
+        
+        - processPayment:
+            call: http
+            with:
+              method: post
+              endpoint: https://payments.example.com/api/charge
+              body:
+                orderId: "${ .body.orderId }"
+                amount: "${ .order.total }"
+      catch:
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/validation
+          as: validationError
+          do:
+            - handleValidation:
+                set:
+                  result:
+                    success: false
+                    reason: validation_failed
+                    details: "${ $validationError.detail }"
+        
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+              status: 402  # Payment Required
+          as: paymentError
+          do:
+            - handlePaymentFailure:
+                set:
+                  result:
+                    success: false
+                    reason: payment_declined
+                    message: "${ $paymentError.detail }"
+            - notifyCustomer:
+                call: http
+                with:
+                  method: post
+                  endpoint: https://notifications.example.com/api/send
+                  body:
+                    template: payment_declined
+                    data: "${ .result }"
+        
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+          as: commError
+          retry:
+            delay:
+              seconds: 5
+            backoff:
+              exponential: {}
+            limit:
+              attempt:
+                count: 3
+```
+
+### Compensation Pattern
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: compensation
+  version: '1.0.0'
+do:
+  - processTransaction:
+      try:
+        - reserveInventory:
+            call: http
+            with:
+              method: post
+              endpoint: https://inventory.example.com/api/reserve
+              body:
+                items: "${ .order.items }"
+            output:
+              as: reservation
+        
+        - chargePayment:
+            call: http
+            with:
+              method: post
+              endpoint: https://payments.example.com/api/charge
+              body:
+                amount: "${ .order.total }"
+                customerId: "${ .order.customerId }"
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: transactionError
+        do:
+          - rollbackInventory:
+              if: "${ .reservation != null }"
+              call: http
+              with:
+                method: post
+                endpoint: https://inventory.example.com/api/release
+                body:
+                  reservationId: "${ .reservation.id }"
+          
+          - logFailure:
+              call: http
+              with:
+                method: post
+                endpoint: https://logging.example.com/api/log
+                body:
+                  level: error
+                  event: transaction_failed
+                  error: "${ $transactionError }"
+                  reservation: "${ .reservation }"
+          
+          - returnError:
+              set:
+                result:
+                  success: false
+                  error: "${ $transactionError.title }"
+                  compensated: "${ .reservation != null }"
+```
+
+### Timeout Handling
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: timeout-handling
+  version: '1.0.0'
+do:
+  - longRunningOperation:
+      try:
+        - executeOperation:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/long-process
+              body: "${ .input }"
+            timeout:
+              after: PT30S
+      catch:
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/timeout
+          as: timeoutError
+          do:
+            - handleTimeout:
+                set:
+                  result:
+                    success: false
+                    reason: timeout
+                    message: Operation timed out after 30 seconds
+            
+            - notifyOperations:
+                call: http
+                with:
+                  method: post
+                  endpoint: https://notifications.example.com/api/alert
+                  body:
+                    alert: operation_timeout
+                    details: "${ $timeoutError }"
+        
+        - errors:
+            with:
+              type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+          retry:
+            delay:
+              seconds: 10
+            limit:
+              attempt:
+                count: 2
+```
+
+### Conditional Retry
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: conditional-retry
+  version: '1.0.0'
+do:
+  - smartRetry:
+      try:
+        - callService:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/process
+              body: "${ .data }"
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: error
+        when: "${ $error.status >= 500 or $error.status == 429 }"  # Only catch 5xx or rate limit
+        retry:
+          when: "${ $error.status == 503 or $error.status == 429 }"  # Only retry specific errors
+          delay:
+            seconds: 5
+          backoff:
+            exponential: {}
+          limit:
+            attempt:
+              count: 3
+            duration:
+              minutes: 5  # Maximum total retry time
+```
+
+## Configuration
+
+### try (required)
+
+Tasks to attempt:
+
+```yaml
+try:
+  - task1:
+      # ...
+  - task2:
+      # ...
+```
+
+### catch (required)
+
+Error handling configuration:
+
+```yaml
+catch:
+  errors:
+    with:
+      type: error-type
+      status: 404
+  as: errorVariable
+  when: "${ condition }"
+  exceptWhen: "${ condition }"
+  retry:
+    # retry configuration
+  do:
+    # compensation tasks
+```
+
+### errors.with (optional)
+
+Filter errors by properties:
+
+```yaml
+errors:
+  with:
+    type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+    status: 503
+    instance: /do/0/apiCall
+```
+
+### as (optional)
+
+Variable name for caught error (default: `error`):
+
+```yaml
+catch:
+  as: myError
+  do:
+    - log:
+        set:
+          errorMessage: "${ $myError.title }"
+```
+
+### when / exceptWhen (optional)
+
+Conditional error catching:
+
+```yaml
+catch:
+  errors:
+    with:
+      type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+  when: "${ $error.status >= 500 }"  # Only catch 5xx
+  exceptWhen: "${ $error.status == 501 }"  # Except 501
+```
+
+### retry (optional)
+
+Retry configuration:
+
+```yaml
+retry:
+  delay:
+    seconds: 2
+  backoff:
+    exponential: {}  # or linear: {}, or constant: {}
+  limit:
+    attempt:
+      count: 5
+      duration: PT10S  # Max duration per attempt
+    duration: PT5M  # Max total duration
+  jitter:
+    from:
+      milliseconds: 100
+    to:
+      seconds: 1
+```
+
+### do (optional)
+
+Tasks to execute if error is caught:
+
+```yaml
+catch:
+  errors:
+    with:
+      type: error-type
+  do:
+    - compensate:
+        # ...
+    - notify:
+        # ...
+```
+
+## Backoff Strategies
+
+### Constant Backoff
+
+Same delay between retries:
+
+```yaml
+retry:
+  delay:
+    seconds: 3
+  backoff:
+    constant: {}
+  limit:
+    attempt:
+      count: 5
+# Delays: 3s, 3s, 3s, 3s
+```
+
+### Linear Backoff
+
+Linearly increasing delay:
+
+```yaml
+retry:
+  delay:
+    seconds: 2
+  backoff:
+    linear: {}
+  limit:
+    attempt:
+      count: 5
+# Delays: 2s, 4s, 6s, 8s
+```
+
+### Exponential Backoff
+
+Exponentially increasing delay:
+
+```yaml
+retry:
+  delay:
+    seconds: 1
+  backoff:
+    exponential: {}
+  limit:
+    attempt:
+      count: 5
+# Delays: 1s, 2s, 4s, 8s
+```
+
+## Jitter
+
+Add randomness to prevent thundering herd:
+
+```yaml
+retry:
+  delay:
+    seconds: 5
+  backoff:
+    exponential: {}
+  jitter:
+    from:
+      milliseconds: 500
+    to:
+      seconds: 2
+  limit:
+    attempt:
+      count: 3
+# Actual delays: 5s + (0.5-2s), 10s + (0.5-2s), 20s + (0.5-2s)
+```
+
+## Best Practices
+
+1. **Match specific errors** - Use `errors.with` to catch specific error types
+2. **Use exponential backoff** - Best for transient failures
+3. **Set retry limits** - Prevent infinite retries
+4. **Add jitter** - Avoid synchronized retries
+5. **Implement compensation** - Clean up partial successes
+6. **Log errors** - Track error patterns
+7. **Set appropriate timeouts** - Complement retry logic
+8. **Handle different error types differently** - Use multiple catch blocks
+
+## Common Patterns
+
+### Circuit Breaker
+
+```yaml
+try:
+  - call:
+      # ...
+catch:
+  retry:
+    delay:
+      seconds: 5
+    limit:
+      attempt:
+        count: 3
+    # After 3 failures, circuit opens
+  do:
+    - useFallback:
+        # Return cached/default data
+```
+
+### Saga Pattern
+
+```yaml
+try:
+  - step1:
+      # ...
+  - step2:
+      # ...
+  - step3:
+      # ...
+catch:
+  do:
+    - compensateStep3:
+        if: "${ .step3Result != null }"
+    - compensateStep2:
+        if: "${ .step2Result != null }"
+    - compensateStep1:
+        if: "${ .step1Result != null }"
+```
+
+### Fallback Data
+
+```yaml
+try:
+  - fetchLiveData:
+      call: http
+      # ...
+catch:
+  do:
+    - useCachedData:
+        call: http
+        with:
+          endpoint: https://cache.example.com/data
+```
+
+## Error Types
+
+Standard error types:
+
+- `https://serverlessworkflow.io/spec/1.0.0/errors/communication` - Network/HTTP errors
+- `https://serverlessworkflow.io/spec/1.0.0/errors/validation` - Validation failures
+- `https://serverlessworkflow.io/spec/1.0.0/errors/timeout` - Operation timeouts
+- `https://serverlessworkflow.io/spec/1.0.0/errors/expression` - Expression evaluation errors
+
+## Related Topics
+
+- [Raise Task](/tasks/raise) - Explicitly raise errors
+- [Call Task](/tasks/call) - External calls that may fail
+- [Set Task](/tasks/set) - Prepare fallback data

@@ -1,0 +1,434 @@
+---
+title: instance
+description: Manage workflow instances
+---
+
+The `instance` command manages workflow instances, allowing you to start new workflow executions via the CLI.
+
+## Usage
+
+```bash
+lemline instance <subcommand> [OPTIONS]
+```
+
+## Subcommands
+
+- `start` - Start a new workflow instance
+
+---
+
+## instance start
+
+Start a new workflow instance.
+
+### Usage
+
+```bash
+lemline instance start <namespace> <name> [version] [OPTIONS]
+```
+
+### Description
+
+The `start` command creates and launches a new workflow instance. It:
+
+1. Validates the workflow definition exists
+2. Parses and validates the input JSON
+3. Generates a unique workflow instance ID
+4. Sends the start command to the message broker
+5. Returns the instance ID for tracking
+
+For scheduled workflows (cron, after, every), the schedule is persisted before starting the instance.
+
+### Arguments
+
+<ParamField path="namespace" type="string" required>
+  Namespace of the workflow to start.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Name of the workflow to start.
+</ParamField>
+
+<ParamField path="version" type="string" optional>
+  Specific version of the workflow to start. If omitted, uses the latest version.
+</ParamField>
+
+### Options
+
+<ParamField path="-i, --input" type="string">
+  Input data for the workflow instance in JSON format.
+  
+  Supports:
+  - Standard JSON: `{"key": "value"}`
+  - Relaxed JSON: `{key: 'value'}` (single quotes, unquoted keys)
+  - Comments: `{"key": "value" /* comment */}`
+  
+  **Default**: `{}` (empty object)
+</ParamField>
+
+<ParamField path="-z, --zone" type="string">
+  Timezone for workflow scheduling (e.g., `America/New_York`, `UTC`, `Europe/Paris`).
+  
+  Used for workflows with cron or time-based schedules.
+  
+  **Default**: System default timezone
+</ParamField>
+
+## Examples
+
+### Basic Usage
+
+Start a workflow with no input:
+
+```bash
+lemline instance start default my-workflow
+```
+
+Output:
+
+```
+Instance 01JBQZ9XMFP8KQWZ9T5N8F3Y2H started successfully (name: my-workflow, version: 1.0, input: {})
+```
+
+### Start with Input Data
+
+Provide JSON input:
+
+```bash
+lemline instance start default user-onboarding \
+  --input '{"email": "alice@example.com", "name": "Alice"}'
+```
+
+### Start Specific Version
+
+Specify a workflow version:
+
+```bash
+lemline instance start default order-processing 2.0 \
+  --input '{"orderId": "12345", "customerId": "customer-001"}'
+```
+
+### Complex Input Data
+
+Use multi-line JSON:
+
+```bash
+lemline instance start default data-pipeline --input '{
+  "source": "s3://data-bucket/input.csv",
+  "destination": "s3://data-bucket/output.parquet",
+  "transformations": [
+    {"type": "filter", "column": "status", "value": "active"},
+    {"type": "aggregate", "groupBy": ["category"], "function": "sum"}
+  ]
+}'
+```
+
+### Relaxed JSON Input
+
+Use single quotes and unquoted keys:
+
+```bash
+lemline instance start default my-workflow \
+  --input "{user: 'alice', count: 42, active: true}"
+```
+
+### Scheduled Workflow with Timezone
+
+Start a workflow with a cron schedule:
+
+```bash
+lemline instance start default daily-report \
+  --zone America/New_York \
+  --input '{"reportType": "sales"}'
+```
+
+### Input from File
+
+Read input from a file:
+
+```bash
+lemline instance start default my-workflow \
+  --input "$(cat input.json)"
+```
+
+### Input from Command Output
+
+Pipe data from another command:
+
+```bash
+echo '{"userId": "123"}' | \
+  xargs -I {} lemline instance start default my-workflow --input {}
+```
+
+## Input Data
+
+The workflow receives input data in the `${ .input }` context variable:
+
+```yaml workflow.yaml
+document:
+  dsl: 1.0.0
+  namespace: default
+  name: user-workflow
+  version: 1.0
+
+do:
+  - extractEmail:
+      set:
+        email: ${ .input.email }        # From --input
+        name: ${ .input.name }          # From --input
+  
+  - processUser:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/users
+        body:
+          email: ${ .email }
+          name: ${ .name }
+```
+
+Start with:
+
+```bash
+lemline instance start default user-workflow \
+  --input '{"email": "alice@example.com", "name": "Alice"}'
+```
+
+## Workflow Scheduling
+
+Lemline supports scheduled workflows:
+
+### Cron Schedule
+
+Runs on a recurring schedule:
+
+```yaml
+document:
+  dsl: 1.0.0
+  namespace: default
+  name: daily-backup
+  version: 1.0
+
+schedule:
+  cron: "0 2 * * *"  # Every day at 2 AM
+
+do:
+  - backup:
+      call: http
+      with:
+        method: post
+        endpoint: https://backup.example.com/trigger
+```
+
+Start with timezone:
+
+```bash
+lemline instance start default daily-backup --zone America/New_York
+```
+
+### After Duration
+
+Runs once after a delay:
+
+```yaml
+schedule:
+  after: PT1H  # Run 1 hour after start
+```
+
+### Every Duration
+
+Runs repeatedly at intervals:
+
+```yaml
+schedule:
+  every: PT5M  # Run every 5 minutes
+```
+
+## Tracking Workflow Instances
+
+The `start` command returns a workflow instance ID:
+
+```bash
+Instance 01JBQZ9XMFP8KQWZ9T5N8F3Y2H started successfully ...
+```
+
+Use this ID to:
+
+### Watch Progress (Gateway API)
+
+If the gateway is running:
+
+```bash
+grpcurl -plaintext \
+  -d '{"workflowId": "01JBQZ9XMFP8KQWZ9T5N8F3Y2H"}' \
+  localhost:9080 \
+  lemline.v1.WorkflowService/WatchWorkflow
+```
+
+### Query Database
+
+Direct database query:
+
+```sql
+SELECT * FROM workflow_instances 
+WHERE workflow_id = '01JBQZ9XMFP8KQWZ9T5N8F3Y2H';
+```
+
+### Check Logs
+
+Filter runtime logs:
+
+```bash
+# If using JSON logging
+lemline --json listen | jq 'select(.workflowId == "01JBQZ9XMFP8KQWZ9T5N8F3Y2H")'
+```
+
+## Workflow Context
+
+When a workflow starts, the context contains:
+
+```json
+{
+  "input": {/* --input data */},
+  "workflow": {
+    "id": "01JBQZ9XMFP8KQWZ9T5N8F3Y2H",
+    "namespace": "default",
+    "name": "my-workflow",
+    "version": "1.0"
+  }
+}
+```
+
+Access in expressions:
+
+```yaml
+- logWorkflowInfo:
+    set:
+      message: "Starting workflow ${ .workflow.name } version ${ .workflow.version }"
+```
+
+## Error Handling
+
+### Workflow Not Found
+
+```bash
+$ lemline instance start default nonexistent-workflow
+ERROR: Workflow 'nonexistent-workflow' not found in namespace 'default'
+```
+
+### Invalid JSON Input
+
+```bash
+$ lemline instance start default my-workflow --input '{invalid json}'
+ERROR: Invalid JSON input: Unexpected character 'i' at position 1
+```
+
+### Invalid Timezone
+
+```bash
+$ lemline instance start default my-workflow --zone Invalid/Zone
+ERROR: Invalid timezone ID: 'Invalid/Zone'
+```
+
+## Automation Examples
+
+### Batch Start Multiple Instances
+
+Start 10 workflow instances:
+
+```bash
+for i in {1..10}; do
+  lemline instance start default my-workflow \
+    --input "{\"iteration\": $i}"
+done
+```
+
+### Start from CSV Data
+
+Process CSV rows:
+
+```bash
+# users.csv:
+# name,email
+# Alice,alice@example.com
+# Bob,bob@example.com
+
+tail -n +2 users.csv | while IFS=, read name email; do
+  lemline instance start default user-onboarding \
+    --input "{\"name\": \"$name\", \"email\": \"$email\"}"
+done
+```
+
+### CI/CD Integration
+
+Trigger workflow on deploy:
+
+```bash
+#!/bin/bash
+# In your CI/CD pipeline
+
+WORKFLOW_ID=$(lemline instance start default post-deploy-tasks \
+  --input "{
+    \"version\": \"$CI_COMMIT_TAG\",
+    \"environment\": \"production\"
+  }" | grep -oP '01[A-Z0-9]+')
+
+echo "Started post-deploy workflow: $WORKFLOW_ID"
+```
+
+### Scheduled Job Replacement
+
+Replace cron jobs with workflows:
+
+```bash
+# Instead of a cron job, use Lemline
+lemline instance start default database-cleanup \
+  --input '{"daysToKeep": 30}'
+```
+
+## Best Practices
+
+### Input Validation
+
+Validate input in the workflow:
+
+```yaml
+do:
+  - validateInput:
+      switch:
+        - condition: ${ .input.email == null }
+          then:
+            raise:
+              error:
+                type: ValidationError
+                title: Missing required field
+                detail: Email is required
+```
+
+### Idempotency
+
+Include idempotency keys:
+
+```bash
+lemline instance start default payment-processing \
+  --input '{
+    "orderId": "order-12345",
+    "idempotencyKey": "payment-order-12345-2026-02-28"
+  }'
+```
+
+### Testing
+
+Test with sample data before production:
+
+```bash
+# Test with dry-run flag in workflow
+lemline instance start default my-workflow \
+  --input '{"dryRun": true, "data": {...}}'
+```
+
+## See Also
+
+- [definition](/cli/definition) - Manage workflow definitions
+- [listen](/cli/listen) - Run the workflow runtime
+- [gateway](/cli/gateway) - API for starting and watching workflows

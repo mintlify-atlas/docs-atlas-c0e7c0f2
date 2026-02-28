@@ -1,0 +1,444 @@
+---
+title: Run Task
+description: Execute containers, scripts, shell commands, and workflows
+---
+
+The Run task executes external processes including containers, scripts, shell commands, and sub-workflows.
+
+## Run Types
+
+Lemline supports four types of run operations:
+
+### Container Execution
+
+Execute commands in Docker containers:
+
+```yaml
+- processData:
+    run:
+      container:
+        image: data-processor:latest
+        command:
+          - process
+          - --input
+          - "${ .inputFile }"
+        environment:
+          API_KEY: "${ .secrets.apiKey }"
+          LOG_LEVEL: info
+        volumes:
+          - /data:/data
+```
+
+### Script Execution
+
+Run inline or external scripts:
+
+```yaml
+- calculateTotal:
+    run:
+      script:
+        language: javascript
+        code: |
+          const items = input.items;
+          const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+          return { total, itemCount: items.length };
+```
+
+### Shell Command Execution
+
+Execute shell commands:
+
+```yaml
+- backupDatabase:
+    run:
+      shell:
+        command: pg_dump -h ${ .dbHost } -U ${ .dbUser } ${ .dbName } > backup.sql
+        environment:
+          PGPASSWORD: "${ .secrets.dbPassword }"
+```
+
+### Workflow Execution
+
+Invoke sub-workflows:
+
+```yaml
+- processOrder:
+    run:
+      workflow:
+        name: order-processor
+        version: 1.0.0
+        input:
+          orderId: "${ .orderId }"
+          items: "${ .items }"
+        wait: true
+```
+
+## Complete Examples
+
+### Container-Based Data Processing
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: container-processing
+  version: '1.0.0'
+do:
+  - prepareInput:
+      set:
+        inputFile: "/data/input-${ .jobId }.json"
+        outputFile: "/data/output-${ .jobId }.json"
+  
+  - runProcessor:
+      run:
+        container:
+          image: ghcr.io/example/data-processor:2.1.0
+          command:
+            - python
+            - /app/process.py
+            - --input
+            - "${ .inputFile }"
+            - --output
+            - "${ .outputFile }"
+            - --format
+            - json
+          environment:
+            PYTHONUNBUFFERED: "1"
+            LOG_LEVEL: INFO
+            API_ENDPOINT: "${ .apiEndpoint }"
+            API_KEY: "${ .secrets.apiKey }"
+          volumes:
+            - /var/data:/data
+          timeout:
+            after: PT30M
+          cleanup: always
+      output:
+        as: "${ .exitCode }"
+  
+  - checkResult:
+      if: "${ . != 0 }"
+      raise:
+        error:
+          type: https://example.com/errors/processing-failed
+          title: Container Processing Failed
+          status: 500
+          detail: "Container exited with code ${ . }"
+```
+
+### JavaScript Data Transformation
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: script-transformation
+  version: '1.0.0'
+do:
+  - transformData:
+      run:
+        script:
+          language: javascript
+          code: |
+            // Access input data
+            const orders = input.orders;
+            
+            // Transform and aggregate
+            const summary = orders.reduce((acc, order) => {
+              const total = order.items.reduce((sum, item) => 
+                sum + (item.price * item.quantity), 0);
+              
+              acc.totalOrders++;
+              acc.totalRevenue += total;
+              acc.ordersByStatus[order.status] = (acc.ordersByStatus[order.status] || 0) + 1;
+              
+              return acc;
+            }, {
+              totalOrders: 0,
+              totalRevenue: 0,
+              ordersByStatus: {}
+            });
+            
+            // Add computed fields
+            summary.averageOrderValue = summary.totalRevenue / summary.totalOrders;
+            summary.processedAt = new Date().toISOString();
+            
+            return summary;
+      output:
+        as: summary
+```
+
+### Shell Command Execution
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: shell-backup
+  version: '1.0.0'
+do:
+  - createBackup:
+      run:
+        shell:
+          command: |
+            timestamp=$(date +%Y%m%d_%H%M%S)
+            pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME | \
+            gzip > /backups/db_${timestamp}.sql.gz
+            echo "/backups/db_${timestamp}.sql.gz"
+          environment:
+            DB_HOST: "${ .database.host }"
+            DB_USER: "${ .database.user }"
+            DB_NAME: "${ .database.name }"
+            PGPASSWORD: "${ .secrets.dbPassword }"
+          timeout:
+            after: PT10M
+      output:
+        as: "${ .stdout | rtrimstr('\n') }"  # Trim newline from output
+      export:
+        as: "${ { backupFile: . } }"
+  
+  - uploadBackup:
+      run:
+        shell:
+          command: aws s3 cp $BACKUP_FILE s3://$BUCKET/backups/
+          environment:
+            BACKUP_FILE: "${ $context.backupFile }"
+            BUCKET: "${ .s3Bucket }"
+            AWS_ACCESS_KEY_ID: "${ .secrets.awsAccessKey }"
+            AWS_SECRET_ACCESS_KEY: "${ .secrets.awsSecretKey }"
+```
+
+### Sub-Workflow Execution
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-orchestration
+  version: '1.0.0'
+do:
+  - validateOrder:
+      run:
+        workflow:
+          name: order-validator
+          version: 1.0.0
+          input:
+            order: "${ .order }"
+          wait: true
+      output:
+        as: validation
+  
+  - checkValidation:
+      if: "${ .validation.valid == false }"
+      raise:
+        error:
+          type: https://example.com/errors/validation
+          title: Order Validation Failed
+          detail: "${ .validation.errors | join(', ') }"
+  
+  - processPayment:
+      run:
+        workflow:
+          name: payment-processor
+          version: 2.1.0
+          input:
+            orderId: "${ .order.id }"
+            amount: "${ .order.total }"
+            customerId: "${ .order.customerId }"
+          wait: true
+      output:
+        as: payment
+  
+  - fulfillOrder:
+      run:
+        workflow:
+          name: order-fulfillment
+          version: 1.0.0
+          input:
+            orderId: "${ .order.id }"
+            items: "${ .order.items }"
+            paymentId: "${ .payment.transactionId }"
+          wait: false  # Fire and forget
+```
+
+### Python Data Analysis
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: python-analysis
+  version: '1.0.0'
+do:
+  - analyzeData:
+      run:
+        script:
+          language: python
+          code: |
+            import json
+            import statistics
+            from datetime import datetime
+            
+            # Access input
+            data_points = input['dataPoints']
+            
+            # Perform analysis
+            values = [dp['value'] for dp in data_points]
+            
+            analysis = {
+                'count': len(values),
+                'mean': statistics.mean(values),
+                'median': statistics.median(values),
+                'stdev': statistics.stdev(values) if len(values) > 1 else 0,
+                'min': min(values),
+                'max': max(values),
+                'analyzedAt': datetime.utcnow().isoformat()
+            }
+            
+            # Return result
+            return analysis
+      output:
+        as: analysis
+```
+
+## Configuration
+
+### Container
+
+```yaml
+run:
+  container:
+    image: image-name:tag        # Required
+    command: ["cmd", "arg"]      # Optional
+    environment:                  # Optional
+      KEY: value
+    volumes:                      # Optional
+      - /host:/container
+    timeout:                      # Optional
+      after: PT30M
+    cleanup: always               # Optional: always, success, never
+```
+
+### Script
+
+```yaml
+run:
+  script:
+    language: javascript          # Required: javascript, python, etc.
+    code: |                       # Required: inline code
+      return { result: 42 };
+    # OR
+    source: file://script.js      # External script
+    timeout:                      # Optional
+      after: PT5M
+```
+
+### Shell
+
+```yaml
+run:
+  shell:
+    command: echo "Hello"         # Required
+    environment:                  # Optional
+      KEY: value
+    timeout:                      # Optional
+      after: PT1M
+```
+
+### Workflow
+
+```yaml
+run:
+  workflow:
+    name: workflow-name           # Required
+    version: 1.0.0                # Optional
+    input:                        # Optional
+      field: value
+    wait: true                    # Optional: wait for completion
+    timeout:                      # Optional
+      after: PT1H
+```
+
+## Output Handling
+
+### Container Output
+
+```yaml
+run:
+  container:
+    # ...
+output:
+  as: "${ { exitCode: .exitCode, stdout: .stdout, stderr: .stderr } }"
+```
+
+### Script Output
+
+```yaml
+run:
+  script:
+    code: |
+      return { computed: 42 };
+output:
+  as: "${ .computed }"  # Access returned value
+```
+
+### Shell Output
+
+```yaml
+run:
+  shell:
+    command: echo "result"
+output:
+  as: "${ .stdout | rtrimstr('\n') }"  # Trim newline
+```
+
+### Workflow Output
+
+```yaml
+run:
+  workflow:
+    name: sub-workflow
+    wait: true
+output:
+  as: "${ .result }"  # Sub-workflow output
+```
+
+## Best Practices
+
+1. **Set timeouts** - Always configure timeouts for run operations
+2. **Handle errors** - Wrap run tasks in Try/Catch
+3. **Secure secrets** - Pass secrets via environment variables, not command args
+4. **Clean up containers** - Use appropriate cleanup policy
+5. **Validate outputs** - Check exit codes and output format
+6. **Use specific versions** - Pin container image and workflow versions
+7. **Limit privileges** - Run containers with minimal permissions
+8. **Log appropriately** - Capture stdout/stderr for debugging
+
+## Error Handling
+
+```yaml
+- runSafely:
+    try:
+      - executeContainer:
+          run:
+            container:
+              image: processor:latest
+              command: ["process"]
+            timeout:
+              after: PT10M
+    catch:
+      errors:
+        with:
+          type: https://serverlessworkflow.io/spec/1.0.0/errors/timeout
+      do:
+        - handleTimeout:
+            set:
+              result:
+                success: false
+                reason: timeout
+```
+
+## Related Topics
+
+- [Try/Catch](/tasks/try-catch) - Handle run failures
+- [Set Task](/tasks/set) - Prepare run inputs
+- [Call Task](/tasks/call) - Alternative for HTTP-based integrations

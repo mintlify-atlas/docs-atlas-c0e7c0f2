@@ -1,0 +1,306 @@
+---
+title: listen
+description: Start the workflow message consumer
+---
+
+The `listen` command starts the Lemline workflow runtime, consuming messages from the configured message broker and executing workflows.
+
+## Usage
+
+```bash
+lemline listen [OPTIONS]
+```
+
+## Description
+
+When you run `lemline listen`, the runtime:
+
+1. Displays the Lemline ASCII art mascot
+2. Connects to the configured message broker (RabbitMQ, Kafka, etc.)
+3. Subscribes to workflow command and event channels
+4. Begins processing workflow messages
+5. Runs until interrupted (Ctrl+C)
+
+The listen command is the core runtime process that executes workflows. It should be run as a long-running service in production environments.
+
+## Options
+
+<ParamField path="-m, --metrics-port" type="integer">
+  Override the metrics endpoint port from configuration.
+  
+  The metrics endpoint exposes Prometheus-compatible metrics at `/q/metrics`.
+  
+  **Default**: Value from configuration file or `9090`
+</ParamField>
+
+<ParamField path="--mock-config" type="string">
+  Path to mock configuration file (YAML/JSON).
+  
+  Enables **test mode** with mock activity responses. Use this for local testing without external dependencies.
+  
+  **Example**: `--mock-config=mocks.yaml`
+</ParamField>
+
+## Examples
+
+### Basic Usage
+
+Start the workflow consumer with default configuration:
+
+```bash
+lemline listen
+```
+
+### Custom Metrics Port
+
+Override the metrics port:
+
+```bash
+lemline listen --metrics-port 9091
+```
+
+### Test Mode with Mocks
+
+Run with mock activity responses for local testing:
+
+```bash
+lemline listen --mock-config test/mocks.yaml
+```
+
+### With Debug Logging
+
+Enable detailed debug logs:
+
+```bash
+lemline --debug listen
+```
+
+### Custom Configuration
+
+Use a specific configuration file:
+
+```bash
+lemline --config /etc/lemline/prod.yaml listen
+```
+
+## Configuration
+
+The listen command requires proper configuration for:
+
+- **Database connection**: PostgreSQL, MySQL, or H2
+- **Message broker**: RabbitMQ, Kafka, or in-memory
+- **Metrics**: Port and endpoint settings
+
+Example configuration:
+
+```yaml lemline.yaml
+lemline:
+  database:
+    url: jdbc:postgresql://localhost:5432/lemline
+    username: lemline
+    password: secret
+  
+  messaging:
+    type: rabbitmq
+    host: localhost
+    port: 5672
+  
+  metrics:
+    port: 9090
+    enabled: true
+```
+
+## Monitoring
+
+Once the runtime is running, you can monitor it via:
+
+### Metrics Endpoint
+
+```bash
+curl http://localhost:9090/q/metrics
+```
+
+Returns Prometheus-compatible metrics including:
+
+- Workflow execution counts and durations
+- Message processing rates
+- Error rates
+- Database connection pool stats
+
+### Health Check
+
+```bash
+curl http://localhost:9090/q/health
+```
+
+Returns health status:
+
+```json
+{
+  "status": "UP",
+  "checks": [
+    {"name": "Database connection", "status": "UP"},
+    {"name": "Message broker", "status": "UP"}
+  ]
+}
+```
+
+## Test Mode
+
+The `--mock-config` option enables test mode for local development without external dependencies.
+
+### Mock Configuration Format
+
+Create a YAML file defining mock responses:
+
+```yaml mocks.yaml
+mocks:
+  - activity: myNamespace/getUserData
+    response:
+      status: success
+      data:
+        userId: "123"
+        name: "Alice"
+  
+  - activity: myNamespace/sendEmail
+    response:
+      status: success
+      messageId: "mock-email-id"
+```
+
+Then run:
+
+```bash
+lemline listen --mock-config mocks.yaml
+```
+
+## Graceful Shutdown
+
+The runtime handles shutdown signals gracefully:
+
+```bash
+# Send interrupt signal
+kill -SIGINT <pid>
+
+# Or use Ctrl+C in terminal
+```
+
+On shutdown, the runtime:
+
+1. Stops accepting new messages
+2. Completes in-flight workflow executions
+3. Closes database connections
+4. Disconnects from message broker
+5. Exits cleanly
+
+## Production Deployment
+
+### Systemd Service
+
+Create `/etc/systemd/system/lemline.service`:
+
+```ini
+[Unit]
+Description=Lemline Workflow Runtime
+After=network.target postgresql.service rabbitmq-server.service
+
+[Service]
+Type=simple
+User=lemline
+WorkingDirectory=/opt/lemline
+ExecStart=/opt/lemline/bin/lemline --config /etc/lemline/config.yaml listen
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl enable lemline
+sudo systemctl start lemline
+sudo systemctl status lemline
+```
+
+### Docker
+
+```bash
+docker run -d \
+  --name lemline \
+  -v /path/to/config.yaml:/config/lemline.yaml \
+  -p 9090:9090 \
+  lemline/lemline:latest \
+  listen --config /config/lemline.yaml
+```
+
+### Kubernetes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lemline-runtime
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: lemline
+  template:
+    metadata:
+      labels:
+        app: lemline
+    spec:
+      containers:
+      - name: lemline
+        image: lemline/lemline:latest
+        command: ["lemline"]
+        args: ["listen", "--config", "/config/lemline.yaml"]
+        ports:
+        - containerPort: 9090
+          name: metrics
+        volumeMounts:
+        - name: config
+          mountPath: /config
+      volumes:
+      - name: config
+        configMap:
+          name: lemline-config
+```
+
+## Troubleshooting
+
+### Connection Issues
+
+If the runtime fails to connect:
+
+```bash
+# Check with debug logging
+lemline --debug listen
+
+# Verify configuration
+lemline config show
+```
+
+### Performance Tuning
+
+For high-throughput scenarios:
+
+```yaml
+lemline:
+  messaging:
+    consumer:
+      concurrency: 10  # Number of concurrent message handlers
+      prefetch: 100    # Message prefetch count
+  
+  database:
+    pool:
+      max-size: 20     # Connection pool size
+```
+
+## See Also
+
+- [gateway](/cli/gateway) - Start the gRPC gateway
+- [config](/cli/config) - View and manage configuration
+- [instance start](/cli/instance) - Start workflow instances

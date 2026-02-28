@@ -1,0 +1,492 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for Lemline deployments
+---
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Workflow instances not processing">
+    **Symptoms:**
+    - Workflows stuck in active state
+    - No log messages for workflow processing
+    - Messages not being consumed from broker
+
+    **Diagnosis:**
+    ```bash
+    # Check if runner is connected to broker
+    ./lemline config | grep messaging
+
+    # Check health endpoints
+    curl http://localhost:8080/health/ready
+
+    # Check logs for connection errors
+    ./lemline listen --debug
+    ```
+
+    **Solutions:**
+    1. Verify message broker is running and accessible
+    2. Check broker credentials in configuration
+    3. Ensure topics/queues exist (Kafka) or exchanges/queues are bound (RabbitMQ)
+    4. Verify network connectivity to broker
+    5. Check for consumer group conflicts (Kafka)
+  </Accordion>
+
+  <Accordion title="Database connection pool exhausted">
+    **Symptoms:**
+    - Error: "Unable to acquire connection from pool"
+    - Slow workflow processing
+    - High database connection count
+
+    **Diagnosis:**
+    ```bash
+    # Check active connections metric
+    curl http://localhost:8080/q/metrics | grep database_connections
+
+    # Check for connection leaks in logs
+    ./lemline listen --debug 2>&1 | grep -i "connection"
+    ```
+
+    **Solutions:**
+    1. Increase connection pool size:
+    ```yaml
+    quarkus:
+      datasource:
+        postgresql:
+          jdbc:
+            max-size: 20  # Default is 10
+            min-size: 5
+    ```
+    2. Check for slow queries holding connections
+    3. Verify database server has capacity for more connections
+    4. Look for connection leaks (should not occur in normal operation)
+  </Accordion>
+
+  <Accordion title="High memory usage (JVM mode)">
+    **Symptoms:**
+    - OutOfMemoryError in logs
+    - Frequent garbage collection
+    - Process killed by OS
+
+    **Diagnosis:**
+    ```bash
+    # Check JVM metrics
+    curl http://localhost:8080/q/metrics | grep jvm_memory
+
+    # Check heap dump (requires JVM flags)
+    jmap -dump:live,format=b,file=heap.bin <pid>
+    ```
+
+    **Solutions:**
+    1. Increase heap size:
+    ```bash
+    java -Xms512m -Xmx2g -jar lemline-runner.jar listen
+    ```
+    2. Switch to native binary for lower memory footprint
+    3. Reduce workflow state size (avoid large data in context)
+    4. Enable G1GC for better memory management:
+    ```bash
+    java -XX:+UseG1GC -Xmx2g -jar lemline-runner.jar listen
+    ```
+  </Accordion>
+
+  <Accordion title="Migrations fail with checksum mismatch">
+    **Symptoms:**
+    - Error: "Migration checksum mismatch"
+    - Application fails to start
+
+    **Diagnosis:**
+    ```bash
+    # Check migration history
+    ./lemline migrate status
+
+    # Compare checksums in database
+    # PostgreSQL:
+    SELECT version, checksum, script FROM lemline.lemline_flyway_schema_history;
+    
+    # MySQL:
+    SELECT version, checksum, script FROM lemline_flyway_schema_history;
+    ```
+
+    **Solutions:**
+    1. **Never modify applied migrations** - create new migrations instead
+    2. For development databases, delete the conflicting entry:
+    ```sql
+    DELETE FROM lemline_flyway_schema_history WHERE version = 'VERSION';
+    ```
+    3. For production, create a repair migration
+    4. Use `--force` flag only if you understand the risk:
+    ```bash
+    ./lemline migrate --force
+    ```
+  </Accordion>
+
+  <Accordion title="Workflow fails with 'Unknown task type'">
+    **Symptoms:**
+    - Error: "Unknown or unsupported task type: container"
+    - Workflow fails immediately after starting
+
+    **Diagnosis:**
+    ```bash
+    # Check workflow definition
+    ./lemline definition get namespace workflow-name version
+    ```
+
+    **Solutions:**
+    - **Container tasks** are not yet supported (roadmap item)
+    - **OpenAPI calls** are not yet supported (use HTTP call instead)
+    - **gRPC calls** are not yet supported (roadmap item)
+    - Check [roadmap in README](https://github.com/yourusername/lemline#roadmap) for task support status
+  </Accordion>
+
+  <Accordion title="Retry tasks not executing">
+    **Symptoms:**
+    - Workflows with retries fail immediately
+    - Retry count never increments
+
+    **Diagnosis:**
+    ```bash
+    # Check retry outbox metrics
+    curl http://localhost:8080/q/metrics | grep lemline_retry
+
+    # Check retry table
+    # PostgreSQL:
+    SELECT * FROM lemline.lemline_retries WHERE outbox_completed_at IS NULL;
+    
+    # MySQL:
+    SELECT * FROM lemline_retries WHERE outbox_completed_at IS NULL;
+    ```
+
+    **Solutions:**
+    1. Verify retry outbox is running:
+    ```yaml
+    lemline:
+      retry:
+        outbox:
+          every: "10s"
+          batch-size: 1000
+    ```
+    2. Check for errors in retry service logs
+    3. Verify database connectivity
+    4. Check retry configuration in workflow definition matches supported syntax
+  </Accordion>
+
+  <Accordion title="Listen task not correlating events">
+    **Symptoms:**
+    - Workflow stuck waiting for event
+    - Events are published but not matched
+
+    **Diagnosis:**
+    ```bash
+    # Check listener table
+    # PostgreSQL:
+    SELECT correlation_key, filter, outbox_completed_at 
+    FROM lemline.lemline_listeners 
+    WHERE outbox_completed_at IS NULL;
+    
+    # MySQL:
+    SELECT correlation_key, filter, outbox_completed_at 
+    FROM lemline_listeners 
+    WHERE outbox_completed_at IS NULL;
+
+    # Check listener events table
+    # PostgreSQL:
+    SELECT * FROM lemline.lemline_listener_events ORDER BY created_at DESC LIMIT 10;
+    
+    # MySQL:
+    SELECT * FROM lemline_listener_events ORDER BY created_at DESC LIMIT 10;
+    ```
+
+    **Solutions:**
+    1. Verify correlation key expression evaluates correctly
+    2. Check event filter matches incoming event structure
+    3. Ensure events are published to correct topic/queue
+    4. Verify listener outbox is processing:
+    ```bash
+    curl http://localhost:8080/q/metrics | grep lemline_listener
+    ```
+  </Accordion>
+
+  <Accordion title="TLS/SSL connection errors with gRPC gateway">
+    **Symptoms:**
+    - Error: "SSL handshake failed"
+    - Client cannot connect to gateway
+
+    **Diagnosis:**
+    ```bash
+    # Test gRPC endpoint
+    grpcurl -insecure localhost:9090 list
+
+    # Check gateway configuration
+    ./lemline config | grep grpc
+    ```
+
+    **Solutions:**
+    1. Verify TLS certificates are correctly configured:
+    ```yaml
+    quarkus:
+      grpc:
+        server:
+          ssl:
+            certificate: /path/to/server-cert.pem
+            key: /path/to/server-key.pem
+            client-auth: required
+            trust-store: /path/to/ca-cert.pem
+    ```
+    2. For development, disable TLS:
+    ```yaml
+    quarkus:
+      grpc:
+        server:
+          plain-text: true
+    ```
+    3. Verify client certificates are valid and trusted
+    4. Check certificate expiration dates
+  </Accordion>
+
+  <Accordion title="Native binary fails to start">
+    **Symptoms:**
+    - Segmentation fault
+    - "Unable to create folder at path" error
+    - Missing native library errors
+
+    **Diagnosis:**
+    ```bash
+    # Check for missing dependencies
+    ldd lemline-runner-*-runner
+
+    # Check file permissions
+    ls -la lemline-runner-*-runner
+    ```
+
+    **Solutions:**
+    1. Ensure binary is executable:
+    ```bash
+    chmod +x lemline-runner-*-runner
+    ```
+    2. Install missing system libraries (Linux):
+    ```bash
+    # Ubuntu/Debian
+    sudo apt-get install zlib1g
+    
+    # RHEL/CentOS
+    sudo yum install zlib
+    ```
+    3. Disable Vert.x file caching (should be default):
+    ```yaml
+    vertx:
+      disableFileCaching: true
+    ```
+    4. Run from writable directory (native image may create temp files)
+  </Accordion>
+
+  <Accordion title="High CPU usage with many workflows">
+    **Symptoms:**
+    - CPU usage at 100%
+    - Slow workflow processing
+    - System becomes unresponsive
+
+    **Diagnosis:**
+    ```bash
+    # Check active workflow count
+    curl http://localhost:8080/q/metrics | grep lemline_workflow_instances_active
+
+    # Check outbox processing metrics
+    curl http://localhost:8080/q/metrics | grep outbox
+
+    # Profile CPU usage (JVM mode)
+    jcmd <pid> JFR.start duration=60s filename=profile.jfr
+    ```
+
+    **Solutions:**
+    1. Reduce outbox polling frequency:
+    ```yaml
+    lemline:
+      wait:
+        outbox:
+          every: "30s"  # Default is 10s
+      retry:
+        outbox:
+          every: "30s"
+    ```
+    2. Reduce batch sizes to spread load:
+    ```yaml
+    lemline:
+      wait:
+        outbox:
+          batch-size: 100  # Default is 1000
+    ```
+    3. Scale horizontally (add more stateless workers)
+    4. Optimize workflow definitions (reduce task count, avoid tight loops)
+  </Accordion>
+
+  <Accordion title="Logs show no contextual information">
+    **Symptoms:**
+    - Log messages missing workflow ID, namespace, name
+    - Hard to trace workflow execution
+
+    **Diagnosis:**
+    ```bash
+    # Check log format configuration
+    ./lemline config | grep log.console.format
+    ```
+
+    **Solutions:**
+    Ensure log format includes MDC placeholders:
+    ```yaml
+    quarkus:
+      log:
+        console:
+          format: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%X{workflowNamespace}/%X{workflowName}:%X{workflowVersion}] [%X{workflowId}] [%c{2.}] %s%e%n"
+    ```
+    
+    This is the default format and should include contextual information automatically.
+  </Accordion>
+</AccordionGroup>
+
+## Diagnostic Commands
+
+### Check Configuration
+
+```bash
+# View all configuration
+./lemline config
+
+# View as properties instead of YAML
+./lemline config -f properties
+
+# Include Quarkus properties
+./lemline config --all
+```
+
+### Check Migrations
+
+```bash
+# Show migration status
+./lemline migrate status
+
+# Preview pending migrations
+./lemline migrate --pretend
+```
+
+### Check Health
+
+```bash
+# Overall health
+curl http://localhost:8080/health
+
+# Liveness (should always be UP unless fatal error)
+curl http://localhost:8080/health/live
+
+# Readiness (may be DOWN during startup or overload)
+curl http://localhost:8080/health/ready
+```
+
+### Check Metrics
+
+```bash
+# All metrics
+curl http://localhost:8080/q/metrics
+
+# Workflow metrics only
+curl http://localhost:8080/q/metrics | grep lemline_workflow
+
+# Database metrics
+curl http://localhost:8080/q/metrics | grep lemline_database
+
+# Retry/wait metrics
+curl http://localhost:8080/q/metrics | grep -E "lemline_retry|lemline_wait"
+```
+
+### Check Workflows
+
+```bash
+# List all definitions
+./lemline definition get
+
+# Get specific workflow
+./lemline definition get my-namespace my-workflow 1.0.0
+
+# Upload workflow
+./lemline definition post ./workflows/my-workflow.yaml
+
+# Start instance
+./lemline instance start my-namespace my-workflow -i '{"key": "value"}'
+```
+
+## Performance Tuning
+
+### Database Optimization
+
+```yaml
+quarkus:
+  datasource:
+    postgresql:
+      jdbc:
+        max-size: 20           # Connection pool max
+        min-size: 5            # Connection pool min
+        acquisition-timeout: 5 # Timeout in seconds
+        leak-detection-interval: 60s
+```
+
+### Outbox Tuning
+
+```yaml
+lemline:
+  wait:
+    outbox:
+      every: "10s"           # Polling frequency
+      batch-size: 1000       # Records per batch
+      initial-jitter: "3s"   # Startup delay jitter
+      retry-delay: "30s"     # Backoff on errors
+      max-attempts: 5        # Max retry attempts
+  retry:
+    outbox:
+      every: "10s"
+      batch-size: 1000
+      initial-jitter: "3s"
+      retry-delay: "30s"
+      max-attempts: 5
+```
+
+### Cleanup Tuning
+
+```yaml
+lemline:
+  wait:
+    cleanup:
+      every: "1h"           # Cleanup frequency
+      after: "7d"           # Retention period
+      batch-size: 1000      # Delete batch size
+  retry:
+    cleanup:
+      every: "1h"
+      after: "7d"
+      batch-size: 1000
+```
+
+## Getting Help
+
+If you encounter issues not covered here:
+
+1. Check the [GitHub Issues](https://github.com/yourusername/lemline/issues)
+2. Review [Contributing Guidelines](https://github.com/yourusername/lemline/blob/main/CONTRIBUTING.md)
+3. Open a new issue with:
+   - Lemline version
+   - Database type and version
+   - Message broker type and version
+   - Deployment mode (JVM/native)
+   - Configuration (redact sensitive values)
+   - Logs showing the issue
+   - Steps to reproduce
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" href="./monitoring" icon="chart-simple">
+    Set up monitoring and alerting
+  </Card>
+  <Card title="Observability" href="./observability" icon="chart-line">
+    Configure logging and health checks
+  </Card>
+</CardGroup>

@@ -1,0 +1,164 @@
+---
+title: Configuration Overview
+description: Learn how to configure Lemline with different databases and message brokers.
+keywords: ['configuration', 'yaml', 'database', 'messaging', 'setup']
+---
+
+Lemline uses YAML configuration files to control its runtime behavior. You can configure database connections, message brokers, service settings, and more.
+
+## Configuration File Locations
+
+Lemline resolves configuration files in this order:
+
+1. `--config` CLI flag: `./lemline-runner --config=/path/to/config.yaml`
+2. `LEMLINE_CONFIG` environment variable
+3. `./.lemline.yaml` (current directory)
+4. `~/.config/lemline/config.yaml`
+5. `~/.lemline.yaml` (home directory)
+
+You can also use the `QUARKUS_CONFIG_LOCATIONS` environment variable:
+
+```bash
+QUARKUS_CONFIG_LOCATIONS=application.yml java -jar lemline-runner.jar
+```
+
+## Core Configuration Properties
+
+Lemline uses two main properties to select backing services:
+
+<ParamField path="lemline.database.type" type="string" required>
+  Database type: `postgresql`, `mysql`, or `h2`
+</ParamField>
+
+<ParamField path="lemline.messaging.type" type="string" required>
+  Message broker type: `kafka`, `rabbitmq`, or `pgmq`
+</ParamField>
+
+Based on these properties, Lemline activates the corresponding Quarkus configuration for datasources and messaging connectors.
+
+## Quick Start Example
+
+Here's a minimal configuration for Kafka + PostgreSQL:
+
+```yaml
+lemline:
+  database:
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+
+  messaging:
+    kafka:
+      brokers: localhost:9092
+```
+
+## Configuration Sections
+
+<Columns cols={2}>
+  <Card title="Database" icon="database" href="/configuration/database">
+    Configure PostgreSQL, MySQL, or H2 for workflow state persistence
+  </Card>
+  <Card title="Messaging" icon="message-square" href="/configuration/messaging">
+    Configure Kafka, RabbitMQ, or PGMQ for workflow orchestration
+  </Card>
+  <Card title="Gateway" icon="network" href="/configuration/gateway">
+    Configure the gRPC gateway for workflow ingress and streaming
+  </Card>
+  <Card title="Analytics" icon="bar-chart" href="/configuration/analytics">
+    Configure lifecycle event analytics ingestion
+  </Card>
+</Columns>
+
+## Environment Variable Substitution
+
+All configuration values support environment variable substitution with defaults:
+
+```yaml
+lemline:
+  database:
+    postgresql:
+      host: ${LEMLINE_PG_HOST:localhost}
+      port: ${LEMLINE_PG_PORT:5432}
+      password: ${LEMLINE_PG_PASSWORD:postgres}
+```
+
+<Tip>
+  Use environment variables for sensitive values like passwords and API keys.
+</Tip>
+
+## Quarkus Profiles
+
+Use Quarkus profiles for environment-specific configurations:
+
+```yaml
+lemline:
+  database:
+    postgresql:
+      host: localhost
+      password: dev-password
+
+'%prod':
+  lemline:
+    database:
+      postgresql:
+        host: prod-db.example.com
+        password: ${LEMLINE_PROD_PASSWORD}
+```
+
+Activate a profile with:
+
+```bash
+java -Dquarkus.profile=prod -jar lemline-runner.jar
+```
+
+## Service Settings
+
+Configure wait and retry service behavior:
+
+```yaml
+lemline:
+  wait:
+    outbox:
+      every: "10s"
+      batch-size: 1000
+      initial-jitter: "3s"
+      retry-delay: "30s"
+      max-attempts: 5
+    cleanup:
+      every: "1h"
+      after: "7d"
+      batch-size: 1000
+
+  retry:
+    outbox:
+      every: "10s"
+      batch-size: 1000
+      initial-jitter: "3s"
+      retry-delay: "30s"
+      max-attempts: 5
+    cleanup:
+      every: "1h"
+      after: "7d"
+      batch-size: 1000
+```
+
+<Info>
+  Duration values accept formats like `10s`, `5m`, `1h`, or `7d`.
+</Info>
+
+## Next Steps
+
+<Steps>
+  <Step title="Configure Database">
+    Set up [PostgreSQL or MySQL](/configuration/database) for state persistence
+  </Step>
+  <Step title="Configure Messaging">
+    Set up [Kafka, RabbitMQ, or PGMQ](/configuration/messaging) for orchestration
+  </Step>
+  <Step title="Optional: Configure Gateway">
+    Set up the [gRPC gateway](/configuration/gateway) for workflow APIs
+  </Step>
+</Steps>

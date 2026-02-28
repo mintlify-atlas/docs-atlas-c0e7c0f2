@@ -1,0 +1,310 @@
+---
+title: Database Configuration
+description: Configure PostgreSQL, MySQL, or H2 for workflow state persistence.
+keywords: ['database', 'postgresql', 'mysql', 'h2', 'migrations', 'flyway']
+---
+
+Lemline requires a database to store workflow state and related data. PostgreSQL, MySQL, and H2 are supported.
+
+## Selecting a Database
+
+Set the database type using `lemline.database.type`:
+
+<Tabs>
+  <Tab title="PostgreSQL">
+    ```yaml
+    lemline:
+      database:
+        type: postgresql
+    ```
+  </Tab>
+  <Tab title="MySQL">
+    ```yaml
+    lemline:
+      database:
+        type: mysql
+    ```
+  </Tab>
+  <Tab title="H2">
+    ```yaml
+    lemline:
+      database:
+        type: h2
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  H2 is for testing only. Use PostgreSQL or MySQL in production.
+</Note>
+
+## PostgreSQL Configuration
+
+Configure PostgreSQL connection settings:
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    postgresql:
+      host: ${LEMLINE_PG_HOST:localhost}
+      port: ${LEMLINE_PG_PORT:5432}
+      username: ${LEMLINE_PG_USER:postgres}
+      password: ${LEMLINE_PG_PASSWORD:postgres}
+      database: ${LEMLINE_PG_DB_NAME:lemline}
+```
+
+### PostgreSQL Parameters
+
+<ParamField path="lemline.database.postgresql.host" type="string" required default="localhost">
+  PostgreSQL server hostname or IP address
+</ParamField>
+
+<ParamField path="lemline.database.postgresql.port" type="number" required default="5432">
+  PostgreSQL server port
+</ParamField>
+
+<ParamField path="lemline.database.postgresql.username" type="string" required default="postgres">
+  Database username
+</ParamField>
+
+<ParamField path="lemline.database.postgresql.password" type="string" required default="postgres">
+  Database password. Use environment variables for security.
+</ParamField>
+
+<ParamField path="lemline.database.postgresql.database" type="string" required default="lemline">
+  Database name
+</ParamField>
+
+<Warning>
+  Always set passwords via environment variables: `${LEMLINE_PG_PASSWORD}`
+</Warning>
+
+### PostgreSQL Example
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    postgresql:
+      host: prod-db.example.com
+      port: 5432
+      username: lemline_user
+      password: ${LEMLINE_PG_PASSWORD}
+      database: lemline_production
+```
+
+## MySQL Configuration
+
+Configure MySQL connection settings:
+
+```yaml
+lemline:
+  database:
+    type: mysql
+    mysql:
+      host: ${LEMLINE_MYSQL_HOST:localhost}
+      port: ${LEMLINE_MYSQL_PORT:3306}
+      username: ${LEMLINE_MYSQL_USER:root}
+      password: ${LEMLINE_MYSQL_PASSWORD:password}
+      database: ${LEMLINE_MYSQL_DB_NAME:lemline}
+```
+
+### MySQL Parameters
+
+<ParamField path="lemline.database.mysql.host" type="string" required default="localhost">
+  MySQL server hostname or IP address
+</ParamField>
+
+<ParamField path="lemline.database.mysql.port" type="number" required default="3306">
+  MySQL server port
+</ParamField>
+
+<ParamField path="lemline.database.mysql.username" type="string" required default="root">
+  Database username
+</ParamField>
+
+<ParamField path="lemline.database.mysql.password" type="string" required default="password">
+  Database password. Use environment variables for security.
+</ParamField>
+
+<ParamField path="lemline.database.mysql.database" type="string" required default="lemline">
+  Database name
+</ParamField>
+
+### MySQL Example
+
+```yaml
+lemline:
+  database:
+    type: mysql
+    mysql:
+      host: mysql.internal.example.com
+      port: 3306
+      username: lemline_app
+      password: ${LEMLINE_MYSQL_PASSWORD}
+      database: workflows
+```
+
+## Database Migrations
+
+Lemline includes Flyway migrations that are applied based on the configured database type.
+
+### Migration Configuration
+
+<ParamField path="lemline.database.migrate-at-start" type="boolean" default="false">
+  Apply database migrations automatically on startup
+</ParamField>
+
+<ParamField path="lemline.database.baseline-on-migrate" type="boolean" default="false">
+  Create the schema history table if it doesn't exist
+</ParamField>
+
+### Enabling Migrations
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    migrate-at-start: true
+    baseline-on-migrate: true
+    postgresql:
+      host: localhost
+      port: 5432
+      username: postgres
+      password: postgres
+      database: lemline
+```
+
+<Info>
+  Migrations are versioned and applied in order. Enable `baseline-on-migrate` for existing databases.
+</Info>
+
+### Migration Behavior
+
+<Steps>
+  <Step title="Schema Detection">
+    Flyway checks for the schema history table
+  </Step>
+  <Step title="Baseline Creation">
+    If `baseline-on-migrate: true`, creates the history table
+  </Step>
+  <Step title="Version Check">
+    Compares applied migrations with available migrations
+  </Step>
+  <Step title="Migration Execution">
+    Applies pending migrations in version order
+  </Step>
+</Steps>
+
+## Environment-Specific Configuration
+
+Use Quarkus profiles for different environments:
+
+```yaml
+lemline:
+  database:
+    type: postgresql
+    postgresql:
+      host: localhost
+      port: 5432
+      username: postgres
+      password: dev-password
+      database: lemline_dev
+
+'%prod':
+  lemline:
+    database:
+      postgresql:
+        host: ${LEMLINE_PROD_DB_HOST}
+        username: ${LEMLINE_PROD_DB_USER}
+        password: ${LEMLINE_PROD_DB_PASSWORD}
+        database: lemline_production
+```
+
+Activate with:
+
+```bash
+java -Dquarkus.profile=prod -jar lemline-runner.jar
+```
+
+## Docker Compose Examples
+
+For local development, start a database using Docker Compose:
+
+<Tabs>
+  <Tab title="PostgreSQL">
+    ```bash
+    docker compose -f ./examples/docker-compose.yml --profile kafka-pg up -d
+    ```
+  </Tab>
+  <Tab title="MySQL">
+    ```bash
+    docker compose -f ./examples/docker-compose.yml --profile kafka-mysql up -d
+    ```
+  </Tab>
+</Tabs>
+
+### Default Credentials
+
+**PostgreSQL:**
+- Username: `postgres`
+- Password: `postgres`
+- Database: `lemline`
+
+**MySQL:**
+- Username: `lemline`
+- Password: `lemline`
+- Database: `lemline`
+- Root password: `root`
+
+<Warning>
+  These credentials are for development only. Use strong passwords in production.
+</Warning>
+
+## Connection Pooling
+
+Lemline uses Quarkus Agroal for connection pooling. Advanced settings can be configured via Quarkus properties:
+
+```yaml
+quarkus:
+  datasource:
+    jdbc:
+      min-size: 5
+      max-size: 20
+      acquisition-timeout: 10s
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection refused">
+    - Verify database is running: `docker compose ps`
+    - Check host and port settings match your database
+    - Ensure network connectivity between Lemline and database
+  </Accordion>
+  
+  <Accordion title="Authentication failed">
+    - Verify username and password are correct
+    - Check database grants for the user
+    - Ensure password environment variable is set
+  </Accordion>
+  
+  <Accordion title="Migration errors">
+    - Check database user has DDL permissions
+    - Review Flyway logs for specific errors
+    - For existing databases, enable `baseline-on-migrate`
+  </Accordion>
+  
+  <Accordion title="Database not found">
+    - Verify database name exists
+    - Create database manually if needed
+    - Check `database` parameter matches actual database name
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<Card title="Messaging Configuration" icon="message-square" href="/configuration/messaging">
+  Configure Kafka, RabbitMQ, or PGMQ for workflow orchestration
+</Card>

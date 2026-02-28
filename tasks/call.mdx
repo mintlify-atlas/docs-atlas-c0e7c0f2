@@ -1,0 +1,340 @@
+---
+title: Call Task
+description: Invoke external services using HTTP, OpenAPI, gRPC, and AsyncAPI
+---
+
+The Call task enables workflows to interact with external services and APIs using various protocols. It's the primary mechanism for integrating workflows with external systems.
+
+## Call Types
+
+Lemline supports multiple call types for different protocols:
+
+### HTTP Calls
+
+Make HTTP/HTTPS requests to REST APIs:
+
+```yaml
+- fetchUser:
+    call: http
+    with:
+      method: get
+      endpoint: https://api.example.com/users/{userId}
+      headers:
+        Authorization: "Bearer ${ .token }"
+```
+
+**HTTP Configuration:**
+
+- `method` (required) - HTTP method: `get`, `post`, `put`, `delete`, `patch`
+- `endpoint` (required) - Target URL or URI template
+- `headers` - HTTP headers as key/value pairs
+- `body` - Request body (for POST/PUT/PATCH)
+- `query` - Query parameters as key/value pairs
+- `output` - Response format: `content` (default), `response`, or `raw`
+- `redirect` - Follow redirects (default: `false`)
+
+### OpenAPI Calls
+
+Invoke operations defined in OpenAPI specifications:
+
+```yaml
+- getProduct:
+    call: openapi
+    with:
+      document:
+        endpoint: https://api.example.com/openapi.json
+      operationId: getProductById
+      parameters:
+        productId: "${ .id }"
+```
+
+**OpenAPI Configuration:**
+
+- `document` (required) - OpenAPI specification reference
+- `operationId` (required) - Operation ID from the spec
+- `parameters` - Operation parameters
+- `authentication` - Authentication configuration
+
+### gRPC Calls
+
+Communicate with gRPC services:
+
+```yaml
+- getUserProfile:
+    call: grpc
+    with:
+      proto:
+        endpoint: file://app/greet.proto
+      service:
+        name: users.UserService
+        host: localhost
+        port: 5011
+      method: GetUserProfile
+      arguments:
+        userId: "${ .userId }"
+```
+
+**gRPC Configuration:**
+
+- `proto` (required) - Protobuf definition reference
+- `service` (required) - Service name, host, and port
+- `method` (required) - RPC method name
+- `arguments` - Method arguments
+
+### AsyncAPI Calls
+
+Publish or subscribe to messages using AsyncAPI:
+
+```yaml
+- publishOrder:
+    call: asyncapi
+    with:
+      document:
+        endpoint: https://messaging.example.com/asyncapi.json
+      operation: publishOrderEvent
+      server:
+        name: production
+      message:
+        payload:
+          orderId: "${ .orderId }"
+          status: "${ .status }"
+```
+
+**AsyncAPI Configuration:**
+
+- `document` (required) - AsyncAPI specification reference
+- `operation` (required) - Operation ID from the spec
+- `server` - Server configuration
+- `message` - Message payload for publishing
+- `subscription` - Subscription configuration for consuming
+
+## Complete Examples
+
+### HTTP POST with Error Handling
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: create-user
+  version: '1.0.0'
+do:
+  - createUser:
+      try:
+        - callUserService:
+            call: http
+            with:
+              method: post
+              endpoint: https://api.example.com/users
+              headers:
+                Content-Type: application/json
+                Authorization: "Bearer ${ .authToken }"
+              body:
+                name: "${ .user.name }"
+                email: "${ .user.email }"
+                role: "${ .user.role || 'viewer' }"
+            output:
+              as: "${ .body }"
+      catch:
+        errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        retry:
+          delay:
+            seconds: 2
+          backoff:
+            exponential: {}
+          limit:
+            attempt:
+              count: 3
+```
+
+### OpenAPI with Authentication
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: inventory-check
+  version: '1.0.0'
+use:
+  authentications:
+    inventoryAuth:
+      bearer:
+        token: "${ .secrets.inventoryApiKey }"
+do:
+  - checkInventory:
+      call: openapi
+      with:
+        document:
+          endpoint: https://inventory.example.com/api/openapi.json
+          authentication:
+            use: inventoryAuth
+        operationId: checkItemsAvailability
+        parameters:
+          items: "${ .orderItems }"
+          warehouseId: "${ .warehouseId }"
+```
+
+### gRPC Service Call
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: grpc-greeting
+  version: '1.0.0'
+do:
+  - greetUser:
+      call: grpc
+      with:
+        proto:
+          endpoint: file://app/greet.proto
+        service:
+          name: GreeterApi.Greeter
+          host: localhost
+          port: 5011
+        method: SayHello
+        arguments:
+          name: "${ .user.displayName }"
+      output:
+        as: "${ .message }"
+```
+
+### AsyncAPI Message Publishing
+
+```yaml
+document:
+  dsl: '1.0.0'
+  namespace: examples
+  name: order-event
+  version: '1.0.0'
+do:
+  - processOrder:
+      call: http
+      with:
+        method: post
+        endpoint: https://orders.example.com/api/process
+        body: "${ .order }"
+      output:
+        as: processedOrder
+  
+  - publishOrderEvent:
+      call: asyncapi
+      with:
+        document:
+          endpoint: https://messaging.example.com/asyncapi.json
+        operation: publishOrderProcessed
+        server:
+          name: production
+        message:
+          payload:
+            orderId: "${ .processedOrder.id }"
+            customerId: "${ .processedOrder.customerId }"
+            status: "${ .processedOrder.status }"
+            timestamp: "${ now() }"
+```
+
+## Authentication
+
+All call types support authentication through the endpoint or service configuration:
+
+### Bearer Token
+
+```yaml
+use:
+  authentications:
+    apiAuth:
+      bearer:
+        token: "${ .secrets.apiToken }"
+do:
+  - callApi:
+      call: http
+      with:
+        endpoint:
+          uri: https://api.example.com/data
+          authentication:
+            use: apiAuth
+```
+
+### OAuth2
+
+```yaml
+use:
+  authentications:
+    oauthAuth:
+      oauth2:
+        authority: https://auth.example.com
+        grant: client_credentials
+        client:
+          id: workflow-client
+          secret: "${ .secrets.clientSecret }"
+do:
+  - callProtectedApi:
+      call: http
+      with:
+        endpoint:
+          uri: https://api.example.com/protected
+          authentication:
+            use: oauthAuth
+```
+
+## Error Handling
+
+Call tasks can raise various errors:
+
+- **Communication errors** - Network issues, timeouts, connection failures
+- **Authentication errors** - Invalid credentials (401)
+- **Authorization errors** - Insufficient permissions (403)
+- **Validation errors** - Invalid request format
+- **Server errors** - 5xx status codes
+
+Always wrap external calls in Try/Catch blocks:
+
+```yaml
+- callExternalService:
+    try:
+      - makeCall:
+          call: http
+          with:
+            method: get
+            endpoint: https://api.example.com/data
+    catch:
+      - errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+            status: 503
+        retry:
+          delay:
+            seconds: 5
+          backoff:
+            exponential: {}
+          limit:
+            attempt:
+              count: 3
+      - errors:
+          with:
+            type: https://serverlessworkflow.io/spec/1.0.0/errors/communication
+        as: callError
+        do:
+          - handleError:
+              set:
+                error: "${ $callError }"
+                fallbackData: null
+```
+
+## Best Practices
+
+1. **Set timeouts** - Always configure appropriate timeouts for external calls
+2. **Handle errors** - Use Try/Catch with retry policies for transient failures
+3. **Use specifications** - Prefer OpenAPI/AsyncAPI over raw HTTP when available
+4. **Secure credentials** - Store authentication tokens in secrets, never hardcode
+5. **Transform responses** - Use `output.as` to extract only needed data
+6. **Add context** - Include correlation IDs and request tracking
+7. **Validate inputs** - Ensure required parameters are present before calling
+
+## Related Topics
+
+- [Error Handling](/tasks/try-catch) - Handle failures with Try/Catch
+- [Set Task](/tasks/set) - Transform data before/after calls
+- [Authentication](../reference/authentication) - Configure authentication methods

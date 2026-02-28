@@ -1,0 +1,476 @@
+---
+title: definition
+description: Manage workflow definitions
+---
+
+The `definition` command manages workflow definitions in the Lemline runtime, including creating, retrieving, and deleting workflows.
+
+## Usage
+
+```bash
+lemline definition <subcommand> [OPTIONS]
+```
+
+## Subcommands
+
+- `get` - Retrieve workflow definitions
+- `post` - Create or update workflow definitions
+- `delete` - Delete workflow definitions
+
+---
+
+## definition get
+
+Retrieve and display workflow definitions.
+
+### Usage
+
+```bash
+lemline definition get [namespace] [name] [version] [OPTIONS]
+```
+
+### Description
+
+The `get` command can operate in multiple modes:
+
+- **Interactive mode**: When arguments are omitted, displays a list of workflows and prompts for selection
+- **Direct fetch**: When namespace, name, and version are provided, displays the specific workflow
+- **Filtered list**: When only namespace or name is provided, displays matching workflows
+
+### Arguments
+
+<ParamField path="namespace" type="string" optional>
+  Namespace of the workflow to retrieve. If omitted, lists all workflows.
+</ParamField>
+
+<ParamField path="name" type="string" optional>
+  Name of the workflow to retrieve. Requires namespace to be specified.
+</ParamField>
+
+<ParamField path="version" type="string" optional>
+  Version of the workflow to retrieve. Requires namespace and name.
+</ParamField>
+
+### Options
+
+<ParamField path="-f, --format" type="enum" default="YAML">
+  Output format for the definition.
+  
+  **Values**: `JSON`, `YAML`
+</ParamField>
+
+### Examples
+
+#### Direct Fetch
+
+Get a specific workflow version:
+
+```bash
+lemline definition get default my-workflow 1.0
+```
+
+Output (YAML):
+
+```yaml
+document:
+  dsl: 1.0.0
+  namespace: default
+  name: my-workflow
+  version: 1.0
+do:
+  - setUserId:
+      set:
+        userId: ${ .user.id }
+  - fetchData:
+      call: http
+      with:
+        method: get
+        endpoint: https://api.example.com/users/${ .userId }
+```
+
+#### Get as JSON
+
+```bash
+lemline definition get default my-workflow 1.0 --format JSON
+```
+
+#### Interactive Mode
+
+List all workflows and select one:
+
+```bash
+lemline definition get
+```
+
+Output:
+
+```
+Available workflows:
+  #1: Namespace: default, Name: user-onboarding, Version: 1.0
+  #2: Namespace: default, Name: user-onboarding, Version: 2.0
+  #3: Namespace: default, Name: data-pipeline, Version: 1.0
+  #4: Namespace: production, Name: order-processing, Version: 3.1
+
+Enter # to view, or q to quit: 1
+```
+
+#### Filter by Namespace
+
+List workflows in a specific namespace:
+
+```bash
+lemline definition get production
+```
+
+#### Filter by Name
+
+List all versions of a workflow:
+
+```bash
+lemline definition get default user-onboarding
+```
+
+---
+
+## definition post
+
+Create or update workflow definitions from files.
+
+### Usage
+
+```bash
+lemline definition post [OPTIONS]
+```
+
+### Options
+
+<ParamField path="-f, --file" type="string" repeatable>
+  Path to a workflow definition file. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-d, --directory" type="string" repeatable>
+  Path to a directory containing workflow definition files. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-r, --recursive" type="flag" default="false">
+  Walk through directories recursively. Only valid with `--directory`.
+</ParamField>
+
+<ParamField path="-F, --force" type="flag" default="false">
+  Override workflow definitions if they already exist.
+</ParamField>
+
+### Examples
+
+#### Upload Single File
+
+```bash
+lemline definition post -f workflow.yaml
+```
+
+Output:
+
+```
+  -> Workflow successfully created: 'my-workflow' (version '1.0')
+```
+
+#### Upload Multiple Files
+
+```bash
+lemline definition post -f workflow1.yaml -f workflow2.yaml -f workflow3.yaml
+```
+
+#### Upload from Directory
+
+```bash
+lemline definition post -d ./workflows
+```
+
+Output:
+
+```
+Processing files in directory: /home/user/workflows
+  -> Workflow successfully created: 'user-onboarding' (version '1.0')
+  -> Workflow successfully created: 'data-pipeline' (version '2.0')
+  -> Workflow already exists (use --force to overwrite): 'order-processing' (version '1.5')
+```
+
+#### Recursive Directory Upload
+
+```bash
+lemline definition post -d ./workflows -r
+```
+
+#### Force Update Existing Workflows
+
+```bash
+lemline definition post -f workflow.yaml --force
+```
+
+Output:
+
+```
+  -> Workflow successfully updated: 'my-workflow' (version '1.0')
+```
+
+#### Mixed Sources
+
+Combine files and directories:
+
+```bash
+lemline definition post \
+  -f critical-workflow.yaml \
+  -d ./standard-workflows \
+  -d ./experimental-workflows -r
+```
+
+### File Format
+
+Workflow definition files must be valid Serverless Workflow DSL (YAML or JSON):
+
+```yaml workflow.yaml
+document:
+  dsl: 1.0.0
+  namespace: default
+  name: user-onboarding
+  version: 1.0
+  title: User Onboarding Workflow
+  description: Automated user registration and setup
+
+do:
+  - validateInput:
+      set:
+        email: ${ .input.email | lowercase }
+        username: ${ .input.username }
+  
+  - createAccount:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/accounts
+        body:
+          email: ${ .email }
+          username: ${ .username }
+  
+  - sendWelcomeEmail:
+      call: http
+      with:
+        method: post
+        endpoint: https://api.example.com/emails/send
+        body:
+          to: ${ .email }
+          template: welcome
+```
+
+---
+
+## definition delete
+
+Delete workflow definitions.
+
+### Usage
+
+```bash
+lemline definition delete <namespace> [name] [version] [OPTIONS]
+```
+
+### Description
+
+The delete command operates in multiple modes:
+
+- **Specific version**: Delete a single workflow version
+- **All versions**: Delete all versions of a workflow (by name)
+- **All workflows**: Delete all workflows in a namespace
+- **Interactive mode**: Select from a list when version is omitted
+
+Deletion requires confirmation unless `--force` is used.
+
+### Arguments
+
+<ParamField path="namespace" type="string" required>
+  Namespace of the workflow(s) to delete.
+</ParamField>
+
+<ParamField path="name" type="string" optional>
+  Name of the workflow to delete. If omitted with `--force`, deletes all workflows in the namespace.
+</ParamField>
+
+<ParamField path="version" type="string" optional>
+  Version of the workflow to delete. If omitted, enters interactive mode or deletes all versions (with `--force`).
+</ParamField>
+
+### Options
+
+<ParamField path="-F, --force" type="flag" default="false">
+  Force deletion without confirmation. Scope determined by provided arguments:
+  - No name: Deletes ALL workflows in namespace
+  - Name only: Deletes all versions of that workflow
+  - Name + version: Deletes specific version
+</ParamField>
+
+### Examples
+
+#### Delete Specific Version (with confirmation)
+
+```bash
+lemline definition delete default my-workflow 1.0
+```
+
+Output:
+
+```
+Are you sure you want to delete workflow 'my-workflow' version '1.0'? [y/N]: y
+Successfully deleted workflow 'my-workflow' version '1.0'.
+```
+
+#### Delete with Force (no confirmation)
+
+```bash
+lemline definition delete default my-workflow 1.0 --force
+```
+
+Output:
+
+```
+Successfully deleted workflow 'my-workflow' version '1.0'. (forced)
+```
+
+#### Delete All Versions of a Workflow
+
+```bash
+lemline definition delete default my-workflow --force
+```
+
+Output:
+
+```
+Successfully deleted all 3 versions of workflow 'my-workflow'. (forced)
+```
+
+#### Interactive Mode
+
+Select workflow to delete:
+
+```bash
+lemline definition delete default
+```
+
+Output:
+
+```
+Available workflows:
+  #1: Name: user-onboarding, Version: 1.0
+  #2: Name: user-onboarding, Version: 2.0
+  #3: Name: data-pipeline, Version: 1.0
+
+Enter # to delete, * to delete all listed, or q to quit: 1
+Are you sure you want to delete workflow 'user-onboarding' version '1.0'? [y/N]: y
+Successfully deleted workflow 'user-onboarding' version '1.0'.
+```
+
+#### Delete All Workflows in Namespace
+
+```bash
+lemline definition delete default --force
+```
+
+Output:
+
+```
+Successfully deleted 12 workflows. (forced)
+```
+
+#### Interactive Delete All
+
+Use `*` in interactive mode:
+
+```bash
+lemline definition delete default
+```
+
+Output:
+
+```
+Available workflows:
+  #1: Name: workflow-a, Version: 1.0
+  #2: Name: workflow-b, Version: 1.0
+  #3: Name: workflow-c, Version: 2.0
+
+Enter # to delete, * to delete all listed, or q to quit: *
+Are you sure you want to delete all 3 listed workflows? [y/N]: y
+Successfully deleted 3 workflow(s) as requested by '*' selection.
+```
+
+## Workflow Versioning
+
+Lemline supports multiple versions of the same workflow:
+
+```bash
+# Upload version 1.0
+lemline definition post -f user-onboarding-v1.yaml
+
+# Upload version 2.0 (both versions coexist)
+lemline definition post -f user-onboarding-v2.yaml
+
+# View both versions
+lemline definition get default user-onboarding
+```
+
+When starting an instance:
+
+```bash
+# Use latest version
+lemline instance start default user-onboarding
+
+# Use specific version
+lemline instance start default user-onboarding 1.0
+```
+
+## Best Practices
+
+### Version Control
+
+Store workflow definitions in version control:
+
+```bash
+git/
+  workflows/
+    production/
+      order-processing-v1.yaml
+      order-processing-v2.yaml
+    development/
+      experimental-workflow.yaml
+```
+
+### CI/CD Integration
+
+Automate deployment in CI/CD pipelines:
+
+```bash
+#!/bin/bash
+# deploy-workflows.sh
+
+lemline definition post \
+  -d ./workflows/production \
+  --force
+```
+
+### Testing
+
+Test workflows before deploying:
+
+```bash
+# Upload to test namespace
+lemline definition post -f workflow.yaml
+
+# Test execution
+lemline instance start default my-workflow --input '{"test": true}'
+
+# Verify, then promote to production
+lemline definition post -f workflow.yaml --force
+```
+
+## See Also
+
+- [instance start](/cli/instance) - Start workflow instances
+- [listen](/cli/listen) - Run the workflow runtime

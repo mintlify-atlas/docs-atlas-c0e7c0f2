@@ -1,0 +1,337 @@
+---
+title: Gateway authentication
+description: Secure the gRPC gateway with JWT authentication and authorization
+---
+
+The Lemline gateway supports JWT-based authentication and authorization to secure access to workflow APIs.
+
+## Authentication flow
+
+1. Client obtains a JWT token from an identity provider (e.g., Auth0, Keycloak, Cognito)
+2. Client includes the token in gRPC metadata: `Authorization: Bearer <token>`
+3. Gateway validates the token signature and claims
+4. Gateway checks required scopes and namespace access
+5. If authorized, gateway processes the request
+
+<Warning>
+  By default, authentication is **disabled**. Enable it in production to secure your gateway.
+</Warning>
+
+## Enabling authentication
+
+Set `lemline.gateway.authentication.enabled=true` in your configuration:
+
+```yaml .lemline.yaml
+lemline:
+  gateway:
+    authentication:
+      enabled: true
+      jwt:
+        issuer: https://your-auth-provider.com/
+        audience: lemline-api
+        public-key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+          -----END PUBLIC KEY-----
+```
+
+### Configuration parameters
+
+<ParamField path="authentication.enabled" type="boolean" default="false">
+  Enable JWT authentication. When `false`, all requests are allowed.
+</ParamField>
+
+<ParamField path="authentication.jwt.issuer" type="string" required>
+  JWT issuer URL. Must match the `iss` claim in tokens.
+  
+  Example: `https://auth.example.com/`
+</ParamField>
+
+<ParamField path="authentication.jwt.audience" type="string" required>
+  JWT audience. Must match the `aud` claim in tokens.
+  
+  Example: `lemline-api`, `https://api.example.com`
+</ParamField>
+
+<ParamField path="authentication.jwt.public-key" type="string" required>
+  PEM-encoded RSA public key for verifying token signatures. Supports RSA256, RSA384, RSA512.
+</ParamField>
+
+## Authorization model
+
+The gateway uses **scope-based** and **namespace-based** authorization:
+
+### Required scopes
+
+Each RPC requires specific scopes in the JWT `scope` claim:
+
+| RPC | Required Scope | Description |
+|-----|----------------|-------------|
+| `StartWorkflow` | `workflow:start` | Start workflow instances |
+| `WatchWorkflow` | `workflow:watch` | Stream workflow events |
+| `ListNamespaces` | `workflow:read` | List namespaces |
+| `ListDefinitions` | `workflow:read` | List workflow definitions |
+| `GetDefinition` | `workflow:read` | Get workflow definition |
+| `GetDefinitionStats` | `workflow:read` | Get workflow statistics |
+| `ListInstances` | `workflow:read` | List workflow instances |
+| `GetInstanceTimeline` | `workflow:read` | Get instance timeline |
+| `WatchDefinitionStats` | `workflow:read` | Stream definition stats |
+| `WatchInstances` | `workflow:read` | Stream instance updates |
+
+### Namespace access
+
+JWT tokens can restrict access to specific namespaces using the `namespaces` claim:
+
+```json JWT payload
+{
+  "iss": "https://auth.example.com/",
+  "aud": "lemline-api",
+  "sub": "user-123",
+  "scope": "workflow:start workflow:read",
+  "namespaces": ["production", "staging"],
+  "exp": 1709136896
+}
+```
+
+- If `namespaces` is **present**, user can only access those namespaces
+- If `namespaces` is **absent**, user can access **all** namespaces (admin access)
+
+## Example JWT payloads
+
+### Admin user (all namespaces)
+
+```json
+{
+  "iss": "https://auth.example.com/",
+  "aud": "lemline-api",
+  "sub": "admin-456",
+  "scope": "workflow:start workflow:read",
+  "exp": 1709136896
+}
+```
+
+### Production-only user
+
+```json
+{
+  "iss": "https://auth.example.com/",
+  "aud": "lemline-api",
+  "sub": "user-789",
+  "scope": "workflow:start workflow:read",
+  "namespaces": ["production"],
+  "exp": 1709136896
+}
+```
+
+### Read-only user
+
+```json
+{
+  "iss": "https://auth.example.com/",
+  "aud": "lemline-api",
+  "sub": "viewer-012",
+  "scope": "workflow:read",
+  "namespaces": ["production", "staging"],
+  "exp": 1709136896
+}
+```
+
+## Client examples
+
+### Using grpcurl with JWT
+
+```bash
+# Set your JWT token
+export JWT_TOKEN="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+# Start workflow with authentication
+grpcurl -plaintext \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -d '{
+    "workflow_id": "wf-123",
+    "namespace": "production",
+    "name": "order-fulfillment",
+    "version": "1.0.0"
+  }' \
+  localhost:9000 lemline.gateway.v1.WorkflowGateway/StartWorkflow
+```
+
+### Using TypeScript (Connect-ES)
+
+```typescript
+import { createPromiseClient } from "@connectrpc/connect";
+import { createGrpcWebTransport } from "@connectrpc/connect-web";
+import { WorkflowGateway } from "./gen/lemline/gateway/v1/workflow_gateway_connect";
+
+const jwtToken = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...";
+
+const transport = createGrpcWebTransport({
+  baseUrl: "http://localhost:9000",
+  interceptors: [
+    (next) => async (req) => {
+      req.header.set("Authorization", `Bearer ${jwtToken}`);
+      return next(req);
+    },
+  ],
+});
+
+const client = createPromiseClient(WorkflowGateway, transport);
+
+const response = await client.startWorkflow({
+  workflowId: "wf-123",
+  namespace: "production",
+  name: "order-fulfillment",
+  version: "1.0.0",
+});
+```
+
+### Using Python (grpcio)
+
+```python
+import grpc
+from lemline.gateway.v1 import workflow_gateway_pb2, workflow_gateway_pb2_grpc
+
+jwt_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+# Create channel with credentials
+credentials = grpc.composite_channel_credentials(
+    grpc.ssl_channel_credentials(),
+    grpc.access_token_call_credentials(jwt_token)
+)
+
+channel = grpc.secure_channel('gateway.example.com:9000', credentials)
+stub = workflow_gateway_pb2_grpc.WorkflowGatewayStub(channel)
+
+# Start workflow
+request = workflow_gateway_pb2.StartWorkflowRequest(
+    workflow_id="wf-123",
+    namespace="production",
+    name="order-fulfillment",
+    version="1.0.0"
+)
+
+response = stub.StartWorkflow(request)
+```
+
+## TLS/SSL configuration
+
+In production, combine JWT authentication with TLS encryption:
+
+```yaml .lemline.yaml
+lemline:
+  gateway:
+    tls:
+      enabled: true
+      certificate: /path/to/server.crt
+      private-key: /path/to/server.key
+    authentication:
+      enabled: true
+      jwt:
+        issuer: https://auth.example.com/
+        audience: lemline-api
+        public-key: |
+          -----BEGIN PUBLIC KEY-----
+          ...
+          -----END PUBLIC KEY-----
+```
+
+See [Gateway Configuration](/configuration/gateway) for TLS setup details.
+
+## Error responses
+
+<ResponseField name="UNAUTHENTICATED" type="error">
+  Missing or invalid JWT token
+  
+  ```
+  grpc-status: 16
+  grpc-message: Missing Authorization header
+  ```
+</ResponseField>
+
+<ResponseField name="PERMISSION_DENIED" type="error">
+  Token lacks required scopes or namespace access
+  
+  ```
+  grpc-status: 7
+  grpc-message: Insufficient scopes: requires 'workflow:start'
+  ```
+</ResponseField>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Token validation fails">
+    **Symptoms**: `UNAUTHENTICATED` errors even with valid-looking tokens
+    
+    **Check**:
+    1. Verify `issuer` and `audience` match JWT claims exactly
+    2. Ensure public key is PEM-encoded and matches the signing key
+    3. Check token expiration (`exp` claim)
+    4. Verify algorithm (RSA256/384/512 supported, not HS256)
+    
+    **Debug**:
+    ```bash
+    # Decode JWT to inspect claims
+    echo "$JWT_TOKEN" | cut -d. -f2 | base64 -d | jq .
+    ```
+  </Accordion>
+  
+  <Accordion title="Namespace access denied">
+    **Symptoms**: `PERMISSION_DENIED` for specific namespaces
+    
+    **Check**:
+    1. Verify `namespaces` claim includes the target namespace
+    2. If no `namespaces` claim, user should have admin access
+    3. Ensure namespace name matches exactly (case-sensitive)
+  </Accordion>
+  
+  <Accordion title="Scope errors">
+    **Symptoms**: `PERMISSION_DENIED: Insufficient scopes`
+    
+    **Check**:
+    1. Verify `scope` claim includes required scope (e.g., `workflow:start`)
+    2. Scopes are space-separated in the JWT claim
+    3. Scope names are case-sensitive
+    
+    **Example**:
+    ```json
+    {
+      "scope": "workflow:start workflow:read"  // Correct
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Best practices
+
+<CardGroup cols={2}>
+  <Card title="Use short-lived tokens" icon="clock">
+    Set token expiration (`exp`) to 1 hour or less for better security
+  </Card>
+  <Card title="Rotate signing keys" icon="key">
+    Periodically rotate JWT signing keys and update gateway public key
+  </Card>
+  <Card title="Principle of least privilege" icon="shield">
+    Grant only required scopes and namespace access per user
+  </Card>
+  <Card title="Enable TLS in production" icon="lock">
+    Always use TLS encryption with JWT authentication
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Gateway configuration" icon="gear" href="/configuration/gateway">
+    Full gateway configuration reference
+  </Card>
+  <Card title="Start workflows" icon="play" href="/api/gateway/start-workflow">
+    Start workflow instances via API
+  </Card>
+  <Card title="TLS setup" icon="lock" href="/configuration/gateway">
+    Configure TLS encryption
+  </Card>
+  <Card title="Gateway CLI" icon="terminal" href="/cli/gateway">
+    Gateway command-line reference
+  </Card>
+</CardGroup>

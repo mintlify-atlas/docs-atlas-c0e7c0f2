@@ -1,0 +1,142 @@
+---
+title: Workflow Tasks Overview
+description: Overview of task types available in Lemline workflows
+---
+
+Tasks are the building blocks of Lemline workflows. Each task represents a discrete unit of work that can perform operations, control flow, manipulate data, or interact with external systems.
+
+## Task Categories
+
+Lemline supports several categories of tasks:
+
+### Flow Control Tasks
+
+Control the execution flow of your workflow:
+
+- **[Do](/tasks/do)** - Execute tasks sequentially
+- **[Fork](/tasks/fork)** - Execute tasks in parallel
+- **[Switch](/tasks/switch)** - Conditional branching
+- **[For](/tasks/for)** - Iterate over collections
+
+### Activity Tasks
+
+Interact with external systems and services:
+
+- **[Call](/tasks/call)** - Invoke external services (HTTP, OpenAPI, gRPC, AsyncAPI)
+- **[Run](/tasks/run)** - Execute containers, scripts, shells, or workflows
+
+### Data Tasks
+
+Manipulate and transform data:
+
+- **[Set](/tasks/set)** - Create or modify variables
+
+### Event Tasks
+
+Handle event-driven workflows:
+
+- **[Listen](/tasks/listen)** - Wait for external events
+- **[Emit](/tasks/emit)** - Publish events
+
+### Error Handling Tasks
+
+Manage errors and retries:
+
+- **[Try/Catch](/tasks/try-catch)** - Handle errors and implement retries
+- **[Raise](/tasks/raise)** - Explicitly raise errors
+
+### Timing Tasks
+
+Control timing and delays:
+
+- **[Wait](/tasks/wait)** - Pause workflow execution
+
+## Common Task Properties
+
+All tasks support these common properties:
+
+### Conditional Execution
+
+```yaml
+- myTask:
+    if: "${ .condition == true }"
+    # ... task configuration
+```
+
+### Input Transformation
+
+```yaml
+- myTask:
+    input:
+      from: "${ .specificField }"
+    # ... task configuration
+```
+
+### Output Transformation
+
+```yaml
+- myTask:
+    output:
+      as: "${ { result: .data } }"
+    # ... task configuration
+```
+
+### Flow Control
+
+```yaml
+- myTask:
+    then: nextTaskName  # or 'continue', 'exit', 'end'
+    # ... task configuration
+```
+
+### Timeout
+
+```yaml
+- myTask:
+    timeout:
+      after: PT30S  # ISO 8601 duration
+    # ... task configuration
+```
+
+## Task Naming
+
+Each task must have a unique name within its scope:
+
+```yaml
+do:
+  - fetchData:      # Task name
+      call: http
+      # ...
+  - processData:    # Another unique task name
+      set:
+        # ...
+```
+
+## Data Flow
+
+By default, the output of one task becomes the input to the next task in a sequence:
+
+```yaml
+do:
+  - step1:
+      set:
+        value: "Hello"
+  - step2:
+      set:
+        message: "${ .value + ' World' }"  # Accesses output from step1
+```
+
+## Best Practices
+
+1. **Use descriptive task names** - Make task names clear and meaningful
+2. **Keep tasks focused** - Each task should have a single responsibility
+3. **Handle errors appropriately** - Use Try/Catch for operations that might fail
+4. **Set timeouts** - Prevent workflows from hanging indefinitely
+5. **Transform data explicitly** - Use Set tasks when data transformation logic is complex
+6. **Document complex logic** - Add metadata or comments to explain non-obvious task behavior
+
+## Next Steps
+
+- Learn about [Flow Control Tasks](/tasks/do) for sequential execution
+- Explore [Activity Tasks](/tasks/call) for external integrations
+- Understand [Error Handling](/tasks/try-catch) for robust workflows

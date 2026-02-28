@@ -1,0 +1,465 @@
+---
+title: PGMQ Setup
+description: Run Lemline with PostgreSQL for both messaging and storage
+icon: server
+---
+
+This guide shows you how to set up Lemline with PGMQ (PostgreSQL Message Queue), using PostgreSQL for both persistent storage **and** messaging. This simplifies infrastructure by eliminating the need for a separate message broker.
+
+## Why PGMQ?
+
+- **Single database**: PostgreSQL handles both workflow state and messaging
+- **Simplified operations**: No separate message broker to manage
+- **Transactional guarantees**: Messages and state changes in the same transaction
+- **Cost-effective**: Fewer services to deploy and maintain
+- **Use case**: Smaller deployments, transactional workflows, infrastructure simplicity
+
+<Note>
+Lemline implements PGMQ using pure SQL—no PostgreSQL extension required.
+</Note>
+
+## Prerequisites
+
+- Docker and Docker Compose installed
+- Lemline built locally (see [Installation](/getting-started/installation))
+- Basic understanding of PostgreSQL
+
+## Quick Start
+
+<Steps>
+
+### Start PostgreSQL
+
+From the `examples` directory, start PostgreSQL:
+
+```bash
+cd examples
+docker compose --profile pgmq up -d
+```
+
+This starts:
+- PostgreSQL (port 5432) for both storage and messaging
+
+### Wait for Service
+
+Check that PostgreSQL is healthy:
+
+```bash
+docker compose ps postgres
+```
+
+Status should show "Up" and health "healthy".
+
+### Configure Lemline
+
+The example includes a pre-configured file:
+
+```yaml lemline-pgmq.yaml
+# Lemline Configuration: PGMQ + PostgreSQL
+#
+# This configuration uses PostgreSQL for both database storage AND messaging.
+# Lemline implements PGMQ using pure SQL (no PostgreSQL extension required).
+
+lemline:
+  database:
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+
+  messaging:
+    pgmq:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+```
+
+<Tip>
+Notice that both `database` and `messaging` sections point to the same PostgreSQL instance.
+</Tip>
+
+### Start Lemline
+
+From the project root:
+
+```bash
+LEMLINE_CONFIG=./examples/lemline-pgmq.yaml \
+  java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+```
+
+Lemline will:
+1. Connect to PostgreSQL
+2. Run migrations for workflow tables
+3. Create PGMQ message queue tables
+4. Start listening for workflow commands
+
+### Deploy a Workflow
+
+Install the hello world workflow:
+
+```bash
+lemline definition post -f examples/workflows/hello.yaml
+```
+
+### Run a Workflow Instance
+
+```bash
+lemline instance start -n tutorial.hello-workflow -v 0.1.0
+```
+
+Watch the Lemline logs to see execution.
+
+</Steps>
+
+## Configuration Details
+
+### PostgreSQL Settings
+
+```yaml
+lemline:
+  database:
+    postgresql:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+      # Optional advanced settings:
+      # maxPoolSize: 20
+      # connectionTimeout: 30000
+```
+
+### PGMQ Settings
+
+```yaml
+lemline:
+  messaging:
+    pgmq:
+      host: localhost
+      port: 5432
+      database: lemline
+      username: postgres
+      password: postgres
+      # Optional advanced settings:
+      # visibilityTimeout: 30
+      # pollInterval: 100
+```
+
+**Environment variable overrides:**
+
+```bash
+LEMLINE_DATABASE_POSTGRESQL_HOST=db.example.com
+LEMLINE_DATABASE_POSTGRESQL_PASSWORD=secret123
+LEMLINE_MESSAGING_PGMQ_HOST=db.example.com
+LEMLINE_MESSAGING_PGMQ_PASSWORD=secret123
+```
+
+## How PGMQ Works
+
+PGMQ implements a message queue using PostgreSQL tables:
+
+### Queue Tables
+
+Lemline creates these tables:
+
+- **pgmq_commands_in**: Incoming workflow commands
+- **pgmq_commands_out**: Outgoing workflow commands
+- **pgmq_events_out**: CloudEvents produced by workflows
+
+Each table has:
+- `msg_id`: Unique message ID
+- `read_ct`: Number of times the message has been read
+- `enqueued_at`: When the message was added
+- `vt`: Visibility timeout (when message becomes visible again)
+- `message`: JSON payload
+
+### Message Flow
+
+1. **Send**: INSERT a row into the queue table
+2. **Receive**: SELECT with `FOR UPDATE SKIP LOCKED` to claim a message
+3. **Process**: Execute the workflow task
+4. **Delete**: DELETE the message on success
+5. **Retry**: Update `vt` on failure to make message visible again
+
+<Info>
+`FOR UPDATE SKIP LOCKED` ensures that multiple workers don't process the same message.
+</Info>
+
+## Database Schema
+
+Lemline creates all necessary tables:
+
+**Workflow tables:**
+- workflow_definitions
+- workflow_instances
+- workflow_waits
+- workflow_listeners
+- workflow_retries
+- workflow_failures
+- lifecycle_analytics
+
+**PGMQ tables:**
+- pgmq_commands_in
+- pgmq_commands_out
+- pgmq_events_out
+
+## Horizontal Scaling
+
+Run multiple Lemline instances with the same PGMQ configuration:
+
+```bash
+# Terminal 1
+LEMLINE_CONFIG=./examples/lemline-pgmq.yaml \
+  java -jar lemline-runner.jar listen
+
+# Terminal 2
+LEMLINE_CONFIG=./examples/lemline-pgmq.yaml \
+  java -jar lemline-runner.jar listen
+
+# Terminal 3
+LEMLINE_CONFIG=./examples/lemline-pgmq.yaml \
+  java -jar lemline-runner.jar listen
+```
+
+PostgreSQL's locking ensures each message is processed by exactly one worker.
+
+## Monitoring
+
+### Queue Metrics
+
+Query PGMQ tables to monitor message flow:
+
+```sql
+-- Count messages in each queue
+SELECT 'commands_in' as queue, COUNT(*) as message_count
+FROM pgmq_commands_in
+UNION ALL
+SELECT 'commands_out' as queue, COUNT(*) as message_count
+FROM pgmq_commands_out
+UNION ALL
+SELECT 'events_out' as queue, COUNT(*) as message_count
+FROM pgmq_events_out;
+
+-- Messages by age
+SELECT 
+  CASE 
+    WHEN enqueued_at > NOW() - INTERVAL '1 minute' THEN '< 1 min'
+    WHEN enqueued_at > NOW() - INTERVAL '5 minutes' THEN '< 5 min'
+    WHEN enqueued_at > NOW() - INTERVAL '15 minutes' THEN '< 15 min'
+    ELSE '> 15 min'
+  END as age_bucket,
+  COUNT(*) as message_count
+FROM pgmq_commands_in
+GROUP BY age_bucket;
+
+-- Messages with high read count (potential stuck messages)
+SELECT msg_id, read_ct, enqueued_at, vt
+FROM pgmq_commands_in
+WHERE read_ct > 5
+ORDER BY read_ct DESC;
+```
+
+### Workflow State
+
+```sql
+-- Active workflow instances
+SELECT namespace, name, version, status, created_at
+FROM workflow_instances
+WHERE status = 'running';
+
+-- Recent failures
+SELECT wi.namespace, wi.name, wf.error_type, wf.error_message, wf.failed_at
+FROM workflow_failures wf
+JOIN workflow_instances wi ON wf.instance_id = wi.id
+ORDER BY wf.failed_at DESC
+LIMIT 10;
+```
+
+## Performance Tuning
+
+### PostgreSQL Configuration
+
+Optimize PostgreSQL for PGMQ:
+
+```ini
+# postgresql.conf
+
+# Increase connection limit
+max_connections = 100
+
+# Tune for OLTP workload
+shared_buffers = 4GB
+effective_cache_size = 12GB
+random_page_cost = 1.1
+
+# Reduce checkpoint overhead
+checkpoint_timeout = 15min
+max_wal_size = 4GB
+min_wal_size = 1GB
+
+# Logging (optional)
+log_min_duration_statement = 1000  # Log slow queries
+```
+
+### Indexes
+
+Lemline automatically creates indexes on PGMQ tables:
+
+```sql
+-- Index on visibility timeout for efficient polling
+CREATE INDEX idx_pgmq_commands_in_vt ON pgmq_commands_in(vt) WHERE vt <= NOW();
+
+-- Index on enqueued_at for age-based queries
+CREATE INDEX idx_pgmq_commands_in_enqueued ON pgmq_commands_in(enqueued_at);
+```
+
+### Polling Interval
+
+Adjust the polling interval based on your workload:
+
+```yaml
+lemline:
+  messaging:
+    pgmq:
+      pollInterval: 100  # milliseconds
+```
+
+- **Lower value** (50-100ms): Lower latency, higher CPU usage
+- **Higher value** (500-1000ms): Lower CPU usage, higher latency
+
+## Production Considerations
+
+<AccordionGroup>
+  <Accordion title="Connection pooling">
+    PGMQ uses more database connections than traditional messaging. Configure appropriate pool sizes:
+    ```yaml
+    lemline:
+      database:
+        postgresql:
+          maxPoolSize: 50
+      messaging:
+        pgmq:
+          maxPoolSize: 30
+    ```
+  </Accordion>
+  
+  <Accordion title="Throughput limitations">
+    PGMQ throughput is lower than dedicated message brokers like Kafka or RabbitMQ. Expect:
+    - 1,000-5,000 messages/second (single instance)
+    - 5,000-20,000 messages/second (clustered)
+    
+    For higher throughput, consider Kafka or RabbitMQ.
+  </Accordion>
+  
+  <Accordion title="Message retention">
+    Processed messages are deleted immediately. For audit trails, enable archiving:
+    ```yaml
+    lemline:
+      messaging:
+        pgmq:
+          archiveMessages: true
+    ```
+  </Accordion>
+  
+  <Accordion title="High availability">
+    Use PostgreSQL replication for high availability:
+    - Streaming replication (synchronous or asynchronous)
+    - Connection pooler (PgBouncer, pgpool-II)
+    - Automatic failover (Patroni, Stolon)
+  </Accordion>
+</AccordionGroup>
+
+## Advantages of PGMQ
+
+<CardGroup cols={2}>
+  <Card title="Simplified architecture" icon="diagram-project">
+    One database instead of two services (broker + database)
+  </Card>
+  
+  <Card title="Transactional consistency" icon="shield-halved">
+    Workflow state and messages in the same transaction
+  </Card>
+  
+  <Card title="Lower operational overhead" icon="wrench">
+    Fewer services to deploy, monitor, and maintain
+  </Card>
+  
+  <Card title="Cost-effective" icon="dollar-sign">
+    Reduce infrastructure costs by consolidating services
+  </Card>
+</CardGroup>
+
+## When NOT to Use PGMQ
+
+Consider Kafka or RabbitMQ if you need:
+- Very high message throughput (>20,000 msgs/sec)
+- Message retention and replay
+- Complex routing and fanout patterns
+- Integration with existing messaging infrastructure
+- Event streaming analytics
+
+## Troubleshooting
+
+### PostgreSQL Connection Errors
+
+**Error:** `Connection refused` or `password authentication failed`
+
+**Solution:** Check PostgreSQL status:
+```bash
+docker compose ps postgres
+docker compose logs postgres
+```
+
+### Messages Not Being Processed
+
+**Symptom:** Messages accumulating in queue tables
+
+**Solution:**
+1. Check Lemline logs for errors
+2. Query stuck messages:
+   ```sql
+   SELECT msg_id, read_ct, enqueued_at FROM pgmq_commands_in WHERE read_ct > 10;
+   ```
+3. Manually delete stuck messages if necessary
+4. Scale horizontally by adding more Lemline instances
+
+### High CPU Usage
+
+**Symptom:** PostgreSQL consuming excessive CPU
+
+**Solution:**
+1. Increase `pollInterval` to reduce polling frequency
+2. Add indexes on frequently queried columns
+3. Tune PostgreSQL configuration
+4. Consider switching to Kafka or RabbitMQ for higher throughput
+
+## Stopping the Infrastructure
+
+```bash
+# Stop PostgreSQL but keep data
+docker compose --profile pgmq down
+
+# Stop and remove volumes (clean slate)
+docker compose --profile pgmq down -v
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Kafka + PostgreSQL" icon="database" href="/examples/kafka-postgresql">
+    Scale to higher throughput with Kafka
+  </Card>
+  <Card title="RabbitMQ + MySQL" icon="rabbit" href="/examples/rabbitmq-mysql">
+    Try a different messaging broker
+  </Card>
+  <Card title="Production Deployment" icon="rocket" href="/deployment/production">
+    Deploy Lemline to production
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/observability/monitoring">
+    Set up metrics and monitoring
+  </Card>
+</CardGroup>

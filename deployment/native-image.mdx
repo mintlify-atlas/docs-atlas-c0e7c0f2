@@ -1,0 +1,401 @@
+---
+title: Native Image Compilation
+description: Build GraalVM native binaries for minimal resource footprint and instant startup
+---
+
+Lemline can be compiled to native executables using GraalVM/Mandrel, providing millisecond startup times and reduced memory footprint—perfect for containerized and serverless environments.
+
+## Benefits
+
+- **Fast Startup**: Milliseconds instead of seconds
+- **Reduced Memory**: Lower memory footprint compared to JVM
+- **Self-Contained**: No JVM installation required
+- **Cloud-Native**: Ideal for containers, serverless, and edge deployments
+- **Smaller Images**: Reduced Docker image size
+
+## Prerequisites
+
+<Warning>
+Native image compilation requires significant CPU and memory resources. Expect builds to take 5-15 minutes depending on your hardware.
+</Warning>
+
+### GraalVM Installation
+
+We recommend using **Mandrel 24.1.2.r23** (GraalVM CE equivalent for OpenJDK 23).
+
+**Using SDKMAN:**
+```bash
+sdk install java 24.1.2.r23-mandrel
+sdk use java 24.1.2.r23-mandrel
+```
+
+**Using direct download:**
+```bash
+# Download from https://github.com/graalvm/mandrel/releases
+wget https://github.com/graalvm/mandrel/releases/download/mandrel-24.1.2.Final/mandrel-java23-linux-amd64-24.1.2.Final.tar.gz
+tar -xzf mandrel-java23-linux-amd64-24.1.2.Final.tar.gz
+export JAVA_HOME=/path/to/mandrel-java23-24.1.2.Final
+export PATH=$JAVA_HOME/bin:$PATH
+```
+
+Verify installation:
+```bash
+java -version
+native-image --version
+```
+
+## Building Native Images
+
+### Linux Native Image
+
+Build a native executable for Linux:
+
+<Steps>
+  <Step title="Navigate to project root">
+    ```bash
+    cd lemline
+    ```
+  </Step>
+
+  <Step title="Build the native image">
+    ```bash
+    ./gradlew :lemline-runner:assemble \
+      -Dquarkus.native.enabled=true \
+      -Dquarkus.package.jar.enabled=false
+    ```
+
+    The binary will be created at:
+    ```
+    lemline-runner/build/lemline-runner-<version>-runner
+    ```
+  </Step>
+
+  <Step title="Test the executable">
+    ```bash
+    ./lemline-runner/build/lemline-runner-*-runner --version
+    ```
+  </Step>
+</Steps>
+
+#### Cross-Platform Build (Linux from macOS)
+
+On macOS, build a Linux native image using containers:
+
+```bash
+./gradlew :lemline-runner:assemble \
+  -Dquarkus.native.enabled=true \
+  -Dquarkus.package.jar.enabled=false \
+  -Dquarkus.native.container-build=true
+```
+
+This uses a Linux container to perform the build, producing a Linux-compatible binary.
+
+### macOS Native Image
+
+Build a native executable for macOS:
+
+```bash
+./gradlew clean :lemline-runner:assemble \
+  -Dquarkus.native.enabled=true \
+  -Dquarkus.package.jar.enabled=false
+```
+
+<Note>
+macOS native images can only be built on macOS hardware. Cross-compilation from Linux/Windows is not supported.
+</Note>
+
+### Windows Native Image
+
+Build a native executable for Windows:
+
+<Warning>
+Windows native image builds require Visual Studio Build Tools with C++ support installed.
+</Warning>
+
+```bash
+gradlew.bat -p lemline-runner quarkusBuild \
+  -Dquarkus.native.enabled=true \
+  -Dquarkus.package.jar.enabled=false
+```
+
+The executable will be created as `lemline-runner-<version>-runner.exe`.
+
+## Configuration Options
+
+### Build Performance
+
+Speed up compilation with additional resources:
+
+```bash
+./gradlew :lemline-runner:assemble \
+  -Dquarkus.native.enabled=true \
+  -Dquarkus.package.jar.enabled=false \
+  -Dquarkus.native.native-image-xmx=8g \
+  -Dorg.gradle.jvmargs="-Xmx8g"
+```
+
+### Debug Build
+
+Enable debugging information for troubleshooting:
+
+```bash
+./gradlew :lemline-runner:assemble \
+  -Dquarkus.native.enabled=true \
+  -Dquarkus.package.jar.enabled=false \
+  -Dquarkus.native.debug.enabled=true
+```
+
+### Additional Native Image Arguments
+
+Pass custom arguments to the native-image builder:
+
+```bash
+./gradlew :lemline-runner:assemble \
+  -Dquarkus.native.enabled=true \
+  -Dquarkus.native.additional-build-args="--verbose,--no-fallback"
+```
+
+## Running Native Executables
+
+### Basic Usage
+
+Run the native binary just like the JVM version:
+
+```bash
+# Show version
+./lemline-runner-*-runner --version
+
+# Display configuration
+./lemline-runner-*-runner config
+
+# Start listening for workflows
+./lemline-runner-*-runner listen
+```
+
+### With Configuration File
+
+```bash
+LEMLINE_CONFIG=./lemline.yaml ./lemline-runner-*-runner listen
+```
+
+Or using environment variables:
+
+```bash
+LEMLINE_DATABASE_POSTGRESQL_HOST=postgres \
+LEMLINE_DATABASE_POSTGRESQL_PASSWORD=secret \
+LEMLINE_MESSAGING_KAFKA_BROKERS=kafka:9092 \
+./lemline-runner-*-runner listen
+```
+
+### With Custom Metrics Port
+
+```bash
+./lemline-runner-*-runner listen --metrics-port 9445
+```
+
+## Docker Native Images
+
+### Multi-Stage Dockerfile for Native Image
+
+Create an optimized native image container:
+
+```dockerfile
+# Build stage
+FROM quay.io/quarkus/ubi-quarkus-mandrel-builder-image:jdk-23 AS build
+WORKDIR /workspace
+
+USER root
+RUN microdnf install findutils
+
+COPY --chown=quarkus:quarkus gradlew gradlew.bat settings.gradle.kts gradle.properties ./
+COPY --chown=quarkus:quarkus gradle ./gradle
+COPY --chown=quarkus:quarkus buildSrc ./buildSrc
+
+COPY --chown=quarkus:quarkus lemline-common ./lemline-common
+COPY --chown=quarkus:quarkus lemline-core ./lemline-core
+COPY --chown=quarkus:quarkus lemline-messages-proto ./lemline-messages-proto
+COPY --chown=quarkus:quarkus lemline-runner-config ./lemline-runner-config
+COPY --chown=quarkus:quarkus lemline-runner-common ./lemline-runner-common
+COPY --chown=quarkus:quarkus lemline-runner-cli ./lemline-runner-cli
+COPY --chown=quarkus:quarkus lemline-runner-analytics ./lemline-runner-analytics
+COPY --chown=quarkus:quarkus lemline-runner-definitions ./lemline-runner-definitions
+COPY --chown=quarkus:quarkus lemline-runner-failures ./lemline-runner-failures
+COPY --chown=quarkus:quarkus lemline-runner-forks ./lemline-runner-forks
+COPY --chown=quarkus:quarkus lemline-runner-gateway ./lemline-runner-gateway
+COPY --chown=quarkus:quarkus lemline-runner-listeners ./lemline-runner-listeners
+COPY --chown=quarkus:quarkus lemline-runner-messaging-pgmq ./lemline-runner-messaging-pgmq
+COPY --chown=quarkus:quarkus lemline-runner-parents ./lemline-runner-parents
+COPY --chown=quarkus:quarkus lemline-runner-retries ./lemline-runner-retries
+COPY --chown=quarkus:quarkus lemline-runner-schedules ./lemline-runner-schedules
+COPY --chown=quarkus:quarkus lemline-runner-waits ./lemline-runner-waits
+COPY --chown=quarkus:quarkus lemline-runner ./lemline-runner
+
+USER quarkus
+RUN ./gradlew :lemline-runner:assemble \
+    -Dquarkus.native.enabled=true \
+    -Dquarkus.package.jar.enabled=false \
+    --no-daemon
+
+# Runtime stage
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5
+WORKDIR /app
+
+RUN microdnf install -y shadow-utils && \
+    groupadd --system lemline && \
+    useradd --system --gid lemline --create-home lemline && \
+    microdnf remove -y shadow-utils && \
+    microdnf clean all
+
+COPY --from=build --chown=lemline:lemline /workspace/lemline-runner/build/lemline-runner-*-runner /app/lemline-runner
+
+RUN chmod +x /app/lemline-runner
+
+USER lemline
+
+ENTRYPOINT ["/app/lemline-runner"]
+CMD ["listen"]
+```
+
+Build the native image container:
+
+```bash
+docker build -t lemline-runner:native -f Dockerfile.native .
+```
+
+### Image Size Comparison
+
+| Image Type | Size | Startup Time |
+|------------|------|-------------|
+| JVM (eclipse-temurin:17-jre) | ~450 MB | 3-5 seconds |
+| Native (ubi-minimal) | ~180 MB | 0.05-0.1 seconds |
+
+## Performance Characteristics
+
+### Startup Time
+
+```bash
+# JVM
+time java -jar lemline-runner/build/quarkus-app/quarkus-run.jar --version
+# real: 0m3.421s
+
+# Native
+time ./lemline-runner/build/lemline-runner-*-runner --version
+# real: 0m0.058s
+```
+
+### Memory Usage
+
+| Metric | JVM | Native | Improvement |
+|--------|-----|--------|-------------|
+| Initial heap | 128 MB | 0 MB | N/A |
+| RSS at startup | ~200 MB | ~50 MB | 75% reduction |
+| RSS under load | ~500 MB | ~200 MB | 60% reduction |
+
+### Throughput
+
+Native images have similar throughput to JVM for most workloads. Peak performance may be slightly lower due to ahead-of-time compilation optimizations, but the difference is minimal for I/O-bound workflow orchestration.
+
+## Limitations
+
+<Warning>
+Be aware of these limitations when using native images:
+</Warning>
+
+- **Reflection**: Dynamic reflection requires configuration (handled by Quarkus)
+- **Dynamic Class Loading**: Not supported in native images
+- **JMX**: Limited or no JMX support
+- **Java Agents**: Cannot use Java agents for profiling
+- **Build Time**: Significantly longer build times (5-15 minutes)
+
+## Troubleshooting
+
+### Build Failures
+
+**Out of memory during build:**
+```bash
+./gradlew :lemline-runner:assemble \
+  -Dquarkus.native.enabled=true \
+  -Dquarkus.native.native-image-xmx=8g
+```
+
+**Missing native-image binary:**
+```bash
+# Verify GraalVM installation
+which native-image
+
+# Install native-image component if missing (GraalVM only)
+gu install native-image
+```
+
+### Runtime Issues
+
+**Reflection errors:**
+Quarkus handles most reflection configuration automatically. If you encounter reflection errors, report them as they may indicate missing Quarkus extension configuration.
+
+**SSL/TLS issues:**
+Ensure certificates are available in the native image:
+```bash
+-Dquarkus.native.additional-build-args="--enable-url-protocols=https"
+```
+
+**Missing resources:**
+Quarkus includes application resources automatically. For custom resources, configure inclusion in `application.properties`:
+```properties
+quarkus.native.resources.includes=custom-resource.txt
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use containerized builds">
+    For consistent builds across platforms, use `-Dquarkus.native.container-build=true` to build inside a container.
+  </Accordion>
+
+  <Accordion title="Allocate sufficient build resources">
+    Native image compilation is resource-intensive. Allocate at least 8GB RAM and multiple CPU cores.
+  </Accordion>
+
+  <Accordion title="Test thoroughly">
+    Native images behave differently from JVM. Always test your specific workload with native executables before production deployment.
+  </Accordion>
+
+  <Accordion title="Profile before optimizing">
+    Don't assume native images are always better. Profile your workload—JVM may perform better for long-running, CPU-intensive tasks.
+  </Accordion>
+
+  <Accordion title="Keep GraalVM updated">
+    Native image technology improves rapidly. Keep GraalVM/Mandrel updated for better performance and compatibility.
+  </Accordion>
+</AccordionGroup>
+
+## When to Use Native Images
+
+**Good fit:**
+- Containerized deployments (Kubernetes, Docker)
+- Serverless functions (AWS Lambda, Google Cloud Run)
+- Edge computing with resource constraints
+- Microservices requiring fast scaling
+- Cost-sensitive cloud deployments
+
+**JVM may be better:**
+- Long-running, CPU-intensive workloads
+- Applications requiring JVM tooling (profilers, debuggers)
+- Frequent code changes (faster development iteration)
+- Need for maximum peak performance
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Deployment" icon="docker" href="/deployment/docker">
+    Deploy native images with Docker
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/deployment/kubernetes">
+    Run native images on Kubernetes
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/overview">
+    Configure native executables
+  </Card>
+  <Card title="Horizontal Scaling" icon="arrows-split-up-and-left" href="/deployment/scaling">
+    Scale native deployments
+  </Card>
+</CardGroup>

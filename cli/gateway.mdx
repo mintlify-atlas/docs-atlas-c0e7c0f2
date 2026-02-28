@@ -1,0 +1,400 @@
+---
+title: gateway
+description: Manage the gRPC gateway server
+---
+
+The `gateway` command manages the Lemline gRPC gateway, which provides external APIs for starting workflows and watching their progress.
+
+## Usage
+
+```bash
+lemline gateway <subcommand> [OPTIONS]
+```
+
+## Subcommands
+
+- `start` - Start the gRPC gateway server
+
+## gateway start
+
+Start the gRPC gateway server to handle external API requests.
+
+### Usage
+
+```bash
+lemline gateway start [OPTIONS]
+```
+
+### Description
+
+The gateway server provides:
+
+- **Workflow Start API**: Accept workflow start requests via gRPC
+- **Workflow Watch API**: Stream workflow status updates to clients
+- **Authentication**: Optional auth/authz for API access
+- **Analytics**: Read-side access to workflow execution data
+
+The gateway is separate from the `listen` runtime and should be run as an independent service in production.
+
+### Options
+
+<ParamField path="-g, --grpc-port" type="integer">
+  Override the gRPC port from configuration.
+  
+  **Default**: Value from configuration file or `9080`
+</ParamField>
+
+<ParamField path="-m, --metrics-port" type="integer">
+  Override the metrics endpoint port from configuration.
+  
+  **Default**: Value from configuration file or `9090`
+</ParamField>
+
+## Examples
+
+### Basic Usage
+
+Start the gateway with default configuration:
+
+```bash
+lemline gateway start
+```
+
+### Custom Ports
+
+Override both gRPC and metrics ports:
+
+```bash
+lemline gateway start --grpc-port 9080 --metrics-port 9091
+```
+
+### With Custom Configuration
+
+Use a specific configuration file:
+
+```bash
+lemline --config /etc/lemline/gateway.yaml gateway start
+```
+
+### With Debug Logging
+
+Enable detailed debug logs:
+
+```bash
+lemline --debug gateway start
+```
+
+## Configuration
+
+The gateway requires configuration for:
+
+- **gRPC server**: Port and TLS settings
+- **Database connection**: For analytics and watch API
+- **Message broker**: For sending start commands
+
+Example configuration:
+
+```yaml lemline.yaml
+lemline:
+  gateway:
+    grpc:
+      port: 9080
+      tls:
+        enabled: true
+        cert: /etc/lemline/server.crt
+        key: /etc/lemline/server.key
+    
+    auth:
+      enabled: true
+      type: jwt
+      jwt:
+        issuer: https://auth.example.com
+        audience: lemline-api
+  
+  database:
+    url: jdbc:postgresql://localhost:5432/lemline
+    username: lemline
+    password: secret
+  
+  messaging:
+    type: rabbitmq
+    host: localhost
+    port: 5672
+```
+
+## gRPC API
+
+The gateway exposes the following gRPC services:
+
+### WorkflowService
+
+```protobuf
+service WorkflowService {
+  // Start a workflow instance
+  rpc StartWorkflow(StartWorkflowRequest) returns (StartWorkflowResponse);
+  
+  // Watch workflow status updates (streaming)
+  rpc WatchWorkflow(WatchWorkflowRequest) returns (stream WorkflowEvent);
+  
+  // Get workflow instance details
+  rpc GetWorkflowInstance(GetWorkflowInstanceRequest) returns (WorkflowInstance);
+}
+```
+
+### DefinitionService
+
+```protobuf
+service DefinitionService {
+  // List workflow definitions
+  rpc ListDefinitions(ListDefinitionsRequest) returns (ListDefinitionsResponse);
+  
+  // Get a workflow definition
+  rpc GetDefinition(GetDefinitionRequest) returns (Definition);
+}
+```
+
+## Client Examples
+
+### Start a Workflow (gRPC)
+
+Using `grpcurl`:
+
+```bash
+grpcurl -plaintext \
+  -d '{
+    "namespace": "default",
+    "name": "my-workflow",
+    "input": {"user": "alice"}
+  }' \
+  localhost:9080 \
+  lemline.v1.WorkflowService/StartWorkflow
+```
+
+Response:
+
+```json
+{
+  "workflowId": "01JBQZ9XMFP8KQWZ9T5N8F3Y2H",
+  "status": "STARTED"
+}
+```
+
+### Watch Workflow Progress
+
+```bash
+grpcurl -plaintext \
+  -d '{"workflowId": "01JBQZ9XMFP8KQWZ9T5N8F3Y2H"}' \
+  localhost:9080 \
+  lemline.v1.WorkflowService/WatchWorkflow
+```
+
+Streams events:
+
+```json
+{"type": "STARTED", "timestamp": "2026-02-28T10:00:00Z"}
+{"type": "STEP_COMPLETED", "stepName": "fetchData", "timestamp": "2026-02-28T10:00:01Z"}
+{"type": "COMPLETED", "timestamp": "2026-02-28T10:00:02Z"}
+```
+
+## Monitoring
+
+### Health Check
+
+```bash
+curl http://localhost:9090/q/health
+```
+
+### Metrics
+
+```bash
+curl http://localhost:9090/q/metrics
+```
+
+Gateway-specific metrics:
+
+- `lemline_gateway_requests_total` - Total API requests
+- `lemline_gateway_request_duration_seconds` - Request latency
+- `lemline_gateway_active_watches` - Active watch streams
+
+## Production Deployment
+
+### Systemd Service
+
+Create `/etc/systemd/system/lemline-gateway.service`:
+
+```ini
+[Unit]
+Description=Lemline gRPC Gateway
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=lemline
+WorkingDirectory=/opt/lemline
+ExecStart=/opt/lemline/bin/lemline --config /etc/lemline/gateway.yaml gateway start
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Docker
+
+```bash
+docker run -d \
+  --name lemline-gateway \
+  -v /path/to/config.yaml:/config/lemline.yaml \
+  -p 9080:9080 \
+  -p 9090:9090 \
+  lemline/lemline:latest \
+  gateway start --config /config/lemline.yaml
+```
+
+### Kubernetes
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: lemline-gateway
+spec:
+  selector:
+    app: lemline-gateway
+  ports:
+  - name: grpc
+    port: 9080
+    targetPort: 9080
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lemline-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: lemline-gateway
+  template:
+    metadata:
+      labels:
+        app: lemline-gateway
+    spec:
+      containers:
+      - name: gateway
+        image: lemline/lemline:latest
+        command: ["lemline"]
+        args: ["gateway", "start", "--config", "/config/lemline.yaml"]
+        ports:
+        - containerPort: 9080
+          name: grpc
+        - containerPort: 9090
+          name: metrics
+        volumeMounts:
+        - name: config
+          mountPath: /config
+      volumes:
+      - name: config
+        configMap:
+          name: lemline-gateway-config
+```
+
+## Authentication
+
+The gateway supports JWT-based authentication:
+
+```yaml
+lemline:
+  gateway:
+    auth:
+      enabled: true
+      type: jwt
+      jwt:
+        issuer: https://auth.example.com
+        audience: lemline-api
+        jwks-url: https://auth.example.com/.well-known/jwks.json
+```
+
+Clients must include a valid JWT in the `Authorization` header:
+
+```bash
+grpcurl -plaintext \
+  -H "Authorization: Bearer <jwt-token>" \
+  -d '{...}' \
+  localhost:9080 \
+  lemline.v1.WorkflowService/StartWorkflow
+```
+
+## TLS Configuration
+
+Enable TLS for secure communication:
+
+```yaml
+lemline:
+  gateway:
+    grpc:
+      tls:
+        enabled: true
+        cert: /etc/lemline/server.crt
+        key: /etc/lemline/server.key
+        client-auth: optional
+        trusted-certs: /etc/lemline/ca.crt
+```
+
+Connect with TLS:
+
+```bash
+grpcurl \
+  -cacert ca.crt \
+  -d '{...}' \
+  gateway.example.com:9080 \
+  lemline.v1.WorkflowService/StartWorkflow
+```
+
+## Troubleshooting
+
+### Gateway Won't Start
+
+Check port availability:
+
+```bash
+# Check if port is in use
+sudo lsof -i :9080
+
+# Test with different port
+lemline gateway start --grpc-port 9081
+```
+
+### Connection Refused
+
+Verify the gateway is listening:
+
+```bash
+# Check listening ports
+netstat -tlnp | grep 9080
+
+# Test connectivity
+telnet localhost 9080
+```
+
+### Authentication Errors
+
+Verify JWT configuration:
+
+```bash
+# Check token claims
+jwt decode <token>
+
+# Verify issuer and audience match config
+lemline config show | grep -A 5 jwt
+```
+
+## See Also
+
+- [listen](/cli/listen) - Start the workflow runtime
+- [instance start](/cli/instance) - Start workflows via CLI
+- [config](/cli/config) - View and manage configuration

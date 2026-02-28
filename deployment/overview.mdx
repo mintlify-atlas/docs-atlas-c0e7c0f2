@@ -1,0 +1,125 @@
+---
+title: Deployment Overview
+description: Deploy Lemline workflow runners on your infrastructure
+---
+
+Lemline runs **on top of your existing infrastructure**. Deploy stateless Lemline runners that connect to your event broker and database to orchestrate workflows with minimal overhead.
+
+## Architecture
+
+Lemline uses an event-driven architecture where workflow state is carried within broker messages, minimizing database load and enabling horizontal scalability:
+
+- **Event Broker** (Kafka, RabbitMQ, PGMQ) transports workflow state through messages
+- **Database** (PostgreSQL, MySQL) is used only when strictly necessary: timers, retries, and checkpoints
+- **Stateless Lemline Runners** orchestrate workflows, make calls to your services, and scale horizontally with no coordination overhead
+
+## Deployment Options
+
+### Docker
+
+The fastest way to deploy Lemline is using the official Docker image. The multi-stage Dockerfile builds a JVM-based runtime with minimal dependencies.
+
+- Pre-built image with JRE 17
+- Multi-stage build for optimal layer caching
+- Non-root user for security
+- Configurable via environment variables or mounted config files
+
+[Learn more about Docker deployment →](/deployment/docker)
+
+### Native Image
+
+For production environments requiring minimal resource footprint and fast startup times, Lemline can be compiled to a native binary using GraalVM.
+
+- Startup in milliseconds
+- Reduced memory footprint
+- Perfect for containerized and serverless environments
+- Platform-specific builds (Linux, macOS, Windows)
+
+[Learn more about native image compilation →](/deployment/native-image)
+
+### Kubernetes
+
+Deploy Lemline on Kubernetes for enterprise-grade orchestration with automatic scaling, rolling updates, and high availability.
+
+- StatefulSet or Deployment configurations
+- Horizontal Pod Autoscaling
+- ConfigMaps for configuration management
+- Readiness and liveness probes
+
+[Learn more about Kubernetes deployment →](/deployment/kubernetes)
+
+## Infrastructure Requirements
+
+### Supported Databases
+
+- **PostgreSQL** (recommended)
+- **MySQL**
+- **H2** (development only)
+
+### Supported Message Brokers
+
+- **Kafka** (recommended for high throughput)
+- **RabbitMQ** (recommended for ease of setup)
+- **PGMQ** (PostgreSQL-based, minimal infrastructure)
+
+<Note>
+PGMQ uses PostgreSQL for both database storage and messaging, requiring no additional broker infrastructure.
+</Note>
+
+### Resource Requirements
+
+**Minimum (Development):**
+- 512 MB RAM
+- 1 CPU core
+- 1 GB disk space
+
+**Recommended (Production):**
+- 2-4 GB RAM per runner
+- 2-4 CPU cores per runner
+- 10 GB disk space for database
+
+## Configuration
+
+Lemline can be configured using:
+
+1. **YAML configuration file** - Recommended for most deployments
+2. **Environment variables** - Useful for containerized deployments
+3. **System properties** - Alternative for JVM-based deployments
+
+Configuration priority: System Properties > Environment Variables > Configuration File
+
+## Observability
+
+Lemline includes built-in observability features:
+
+- **Micrometer Metrics** - Prometheus-compatible metrics for workflows, retries, and failures
+- **Health Checks** - Ready and live endpoints integrated into Quarkus runtime
+- **Structured Logging** - JSON-formatted logs with correlation IDs
+
+## Horizontal Scaling
+
+Lemline runners are completely stateless and can be scaled horizontally with no coordination overhead:
+
+- No sticky sessions required
+- No shared state between runners
+- Load balancing handled by the message broker
+- Scale up/down based on message queue depth
+
+[Learn more about horizontal scaling →](/deployment/scaling)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Deployment" icon="docker" href="/deployment/docker">
+    Deploy using Docker containers
+  </Card>
+  <Card title="Native Image" icon="bolt" href="/deployment/native-image">
+    Build GraalVM native binaries
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/deployment/kubernetes">
+    Deploy to Kubernetes clusters
+  </Card>
+  <Card title="Horizontal Scaling" icon="arrows-split-up-and-left" href="/deployment/scaling">
+    Scale runners horizontally
+  </Card>
+</CardGroup>

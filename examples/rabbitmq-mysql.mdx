@@ -1,0 +1,394 @@
+---
+title: RabbitMQ + MySQL Setup
+description: Run Lemline with RabbitMQ messaging and MySQL storage
+icon: rabbit
+---
+
+This guide shows you how to set up Lemline with RabbitMQ for messaging and MySQL for persistent storage. This combination provides reliable message delivery with a widely-used database.
+
+## Why RabbitMQ + MySQL?
+
+- **RabbitMQ**: Battle-tested message broker with flexible routing and excellent observability
+- **MySQL**: Popular relational database with broad ecosystem support
+- **Use case**: Teams familiar with RabbitMQ and MySQL, or requiring specific RabbitMQ features
+
+## Prerequisites
+
+- Docker and Docker Compose installed
+- Lemline built locally (see [Installation](/getting-started/installation))
+- Basic understanding of RabbitMQ and MySQL
+
+## Quick Start
+
+<Steps>
+
+### Start the Infrastructure
+
+From the `examples` directory, start RabbitMQ and MySQL:
+
+```bash
+cd examples
+docker compose --profile rabbit-mysql up -d
+```
+
+This starts:
+- MySQL (port 3306)
+- RabbitMQ (port 5672 for AMQP, port 15672 for management UI)
+
+### Wait for Services
+
+Check that services are healthy:
+
+```bash
+docker compose ps
+```
+
+All services should show status "Up" and health "healthy".
+
+### Configure Lemline
+
+The example includes a pre-configured file:
+
+```yaml lemline-rabbit-mysql.yaml
+# Lemline Configuration: RabbitMQ + MySQL
+
+lemline:
+  database:
+    mysql:
+      host: localhost
+      port: 3306
+      database: lemline
+      username: lemline
+      password: lemline
+
+  messaging:
+    rabbitmq:
+      hostname: localhost
+      port: 5672
+      username: guest
+      password: guest
+```
+
+### Start Lemline
+
+From the project root:
+
+```bash
+LEMLINE_CONFIG=./examples/lemline-rabbit-mysql.yaml \
+  java -jar lemline-runner/build/quarkus-app/quarkus-run.jar listen
+```
+
+Lemline will:
+1. Connect to MySQL and run migrations
+2. Connect to RabbitMQ
+3. Declare necessary exchanges and queues
+4. Start listening for workflow commands
+
+### Deploy a Workflow
+
+Install the hello world workflow:
+
+```bash
+lemline definition post -f examples/workflows/hello.yaml
+```
+
+### Run a Workflow Instance
+
+```bash
+lemline instance start -n tutorial.hello-workflow -v 0.1.0
+```
+
+Watch the Lemline logs to see execution.
+
+</Steps>
+
+## Configuration Details
+
+### MySQL Settings
+
+```yaml
+lemline:
+  database:
+    mysql:
+      host: localhost
+      port: 3306
+      database: lemline
+      username: lemline
+      password: lemline
+      # Optional advanced settings:
+      # maxPoolSize: 20
+      # connectionTimeout: 30000
+```
+
+**Environment variable overrides:**
+
+```bash
+LEMLINE_DATABASE_MYSQL_HOST=db.example.com
+LEMLINE_DATABASE_MYSQL_PORT=3306
+LEMLINE_DATABASE_MYSQL_DATABASE=production
+LEMLINE_DATABASE_MYSQL_USERNAME=lemline_user
+LEMLINE_DATABASE_MYSQL_PASSWORD=secret123
+```
+
+### RabbitMQ Settings
+
+```yaml
+lemline:
+  messaging:
+    rabbitmq:
+      hostname: localhost
+      port: 5672
+      username: guest
+      password: guest
+      # Optional advanced settings:
+      # virtualHost: /
+      # ssl: false
+      # connectionTimeout: 60000
+```
+
+**Environment variable overrides:**
+
+```bash
+LEMLINE_MESSAGING_RABBITMQ_HOSTNAME=rabbitmq.example.com
+LEMLINE_MESSAGING_RABBITMQ_PORT=5672
+LEMLINE_MESSAGING_RABBITMQ_USERNAME=lemline
+LEMLINE_MESSAGING_RABBITMQ_PASSWORD=secret123
+LEMLINE_MESSAGING_RABBITMQ_VIRTUALHOST=/production
+```
+
+## Database Schema
+
+Lemline automatically creates the necessary tables:
+
+- **workflow_definitions**: Workflow DSL definitions
+- **workflow_instances**: Active and completed workflow instances
+- **workflow_waits**: Scheduled tasks and timeouts
+- **workflow_listeners**: Event listeners and subscriptions
+- **workflow_retries**: Retry state for failed tasks
+- **workflow_failures**: Terminal failures and errors
+- **lifecycle_analytics**: Execution metrics and history
+
+Migrations are managed by Flyway and run automatically on startup.
+
+## RabbitMQ Topology
+
+Lemline uses RabbitMQ exchanges and queues:
+
+### Exchanges
+
+- **lemline.commands**: Topic exchange for routing commands
+- **lemline.events**: Topic exchange for CloudEvents
+
+### Queues
+
+- **lemline.commands-in**: Incoming workflow commands (start, resume, cancel)
+- **lemline.commands-out**: Outgoing workflow commands for task execution
+- **lemline.events-out**: CloudEvents produced by workflows
+
+### Bindings
+
+- Commands are routed to queues based on routing keys
+- Multiple Lemline instances share the same queues (competing consumers)
+- Events are published to the events exchange
+
+## RabbitMQ Management UI
+
+Access the RabbitMQ management UI at http://localhost:15672
+
+**Default credentials:**
+- Username: `guest`
+- Password: `guest`
+
+**Use the UI to:**
+- View queues and message counts
+- Monitor consumer activity
+- Inspect message payloads
+- Manage exchanges and bindings
+- View connection and channel statistics
+
+## Horizontal Scaling
+
+Run multiple Lemline instances to scale horizontally:
+
+```bash
+# Terminal 1
+LEMLINE_CONFIG=./examples/lemline-rabbit-mysql.yaml \
+  java -jar lemline-runner.jar listen
+
+# Terminal 2
+LEMLINE_CONFIG=./examples/lemline-rabbit-mysql.yaml \
+  java -jar lemline-runner.jar listen
+
+# Terminal 3
+LEMLINE_CONFIG=./examples/lemline-rabbit-mysql.yaml \
+  java -jar lemline-runner.jar listen
+```
+
+RabbitMQ automatically load-balances messages across consumers.
+
+## Monitoring
+
+### MySQL Monitoring
+
+Connect to MySQL to query workflow state:
+
+```bash
+docker exec -it lemline-mysql mysql -u lemline -plemline lemline
+```
+
+**Useful queries:**
+
+```sql
+-- Active workflow instances
+SELECT namespace, name, version, status, created_at
+FROM workflow_instances
+WHERE status = 'running';
+
+-- Recent failures
+SELECT wi.namespace, wi.name, wf.error_type, wf.error_message, wf.failed_at
+FROM workflow_failures wf
+JOIN workflow_instances wi ON wf.instance_id = wi.id
+ORDER BY wf.failed_at DESC
+LIMIT 10;
+
+-- Listener subscriptions
+SELECT event_type, COUNT(*) as listener_count
+FROM workflow_listeners
+GROUP BY event_type;
+```
+
+### RabbitMQ Metrics
+
+Use the management UI or CLI to monitor:
+
+```bash
+# List queues with message counts
+docker exec lemline-rabbitmq rabbitmqctl list_queues name messages consumers
+
+# List connections
+docker exec lemline-rabbitmq rabbitmqctl list_connections name user
+
+# List consumers
+docker exec lemline-rabbitmq rabbitmqctl list_consumers
+```
+
+## Production Considerations
+
+<AccordionGroup>
+  <Accordion title="Database connection pooling">
+    Configure appropriate pool sizes based on your workload:
+    ```yaml
+    lemline:
+      database:
+        mysql:
+          maxPoolSize: 50
+          minPoolSize: 10
+          connectionTimeout: 30000
+    ```
+  </Accordion>
+  
+  <Accordion title="RabbitMQ clustering">
+    For production, use a RabbitMQ cluster:
+    - At least 3 nodes for high availability
+    - Configure mirrored queues for fault tolerance
+    - Use a load balancer for connection distribution
+  </Accordion>
+  
+  <Accordion title="MySQL tuning">
+    Optimize MySQL for your workload:
+    - Increase `max_connections` for concurrent workflows
+    - Tune `innodb_buffer_pool_size`
+    - Configure appropriate backup and replication
+    - Consider using ProxySQL for connection pooling
+  </Accordion>
+  
+  <Accordion title="Security">
+    - Enable SSL/TLS for RabbitMQ connections
+    - Use SSL for MySQL connections
+    - Create dedicated users with minimal privileges
+    - Rotate credentials regularly
+    - Use RabbitMQ virtual hosts to isolate environments
+    - Restrict network access with firewalls
+  </Accordion>
+</AccordionGroup>
+
+## Message Durability
+
+RabbitMQ can persist messages to disk for durability:
+
+```yaml
+lemline:
+  messaging:
+    rabbitmq:
+      durable: true
+      autoDelete: false
+```
+
+<Warning>
+Durable queues and persistent messages improve reliability but may impact throughput.
+</Warning>
+
+## Troubleshooting
+
+### RabbitMQ Connection Refused
+
+**Error:** `java.net.ConnectException: Connection refused`
+
+**Solution:** Ensure RabbitMQ is running and accessible:
+```bash
+docker compose ps rabbitmq
+docker compose logs rabbitmq
+```
+
+### MySQL Connection Errors
+
+**Error:** `Access denied for user 'lemline'@'localhost'`
+
+**Solution:** Check MySQL status and credentials:
+```bash
+docker compose ps mysql
+docker compose logs mysql
+```
+
+### Queue Not Found
+
+**Error:** `Queue 'lemline.commands-in' not found`
+
+**Solution:** Lemline declares queues automatically. If the error persists, check RabbitMQ logs for permission issues.
+
+### Message Buildup
+
+**Symptom:** Messages accumulating in queues
+
+**Solution:**
+1. Check Lemline logs for errors
+2. Verify consumers are connected (RabbitMQ UI)
+3. Scale horizontally by adding more Lemline instances
+4. Check for slow downstream services
+
+## Stopping the Infrastructure
+
+```bash
+# Stop services but keep data
+docker compose --profile rabbit-mysql down
+
+# Stop services and remove volumes (clean slate)
+docker compose --profile rabbit-mysql down -v
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Kafka + PostgreSQL" icon="database" href="/examples/kafka-postgresql">
+    Try Kafka for higher throughput
+  </Card>
+  <Card title="PGMQ Setup" icon="server" href="/examples/pgmq">
+    Use PostgreSQL for both messaging and storage
+  </Card>
+  <Card title="Production Deployment" icon="rocket" href="/deployment/production">
+    Deploy Lemline to production
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/observability/monitoring">
+    Set up metrics and monitoring
+  </Card>
+</CardGroup>

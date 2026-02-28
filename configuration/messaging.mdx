@@ -1,0 +1,377 @@
+---
+title: Messaging Configuration
+description: Configure Kafka, RabbitMQ, or PGMQ message brokers for workflow orchestration.
+keywords: ['messaging', 'kafka', 'rabbitmq', 'pgmq', 'message broker', 'queues']
+---
+
+Lemline uses a message broker for workflow orchestration. Kafka, RabbitMQ, and PGMQ are supported.
+
+## Dual-Channel Architecture
+
+Lemline uses two message channels:
+
+- **Commands channel** (`commands-in/out`): High-throughput stateless execution
+- **Events channel** (`events-out`): Durable workflow operations requiring database guarantees
+
+<Info>
+  See the [Messaging Architecture ADR](/architecture/adr/0003-messaging-architecture) for details.
+</Info>
+
+## Selecting a Message Broker
+
+Set the messaging type using `lemline.messaging.type`:
+
+<Tabs>
+  <Tab title="Kafka">
+    ```yaml
+    lemline:
+      messaging:
+        type: kafka
+    ```
+  </Tab>
+  <Tab title="RabbitMQ">
+    ```yaml
+    lemline:
+      messaging:
+        type: rabbitmq
+    ```
+  </Tab>
+  <Tab title="PGMQ">
+    ```yaml
+    lemline:
+      messaging:
+        type: pgmq
+    ```
+  </Tab>
+</Tabs>
+
+## Kafka Configuration
+
+Configure Apache Kafka for high-throughput message processing:
+
+```yaml
+lemline:
+  messaging:
+    type: kafka
+    kafka:
+      brokers: ${LEMLINE_KAFKA_BROKERS:localhost:9092}
+      topic: ${LEMLINE_KAFKA_TOPIC:lemline}
+      topic-dlq: ${LEMLINE_KAFKA_TOPIC_DLQ:lemline-dlq}
+      group-id: ${LEMLINE_KAFKA_GROUP_ID:lemline-worker-group}
+```
+
+### Kafka Parameters
+
+<ParamField path="lemline.messaging.kafka.brokers" type="string" required default="localhost:9092">
+  Comma-separated list of Kafka broker addresses
+</ParamField>
+
+<ParamField path="lemline.messaging.kafka.topic" type="string" default="lemline">
+  Main topic for workflow messages
+</ParamField>
+
+<ParamField path="lemline.messaging.kafka.topic-dlq" type="string" default="lemline-dlq">
+  Dead letter queue topic for failed messages
+</ParamField>
+
+<ParamField path="lemline.messaging.kafka.group-id" type="string" default="lemline-worker-group">
+  Consumer group ID for message distribution
+</ParamField>
+
+### Kafka Security
+
+Configure SASL authentication for secure Kafka clusters:
+
+```yaml
+lemline:
+  messaging:
+    type: kafka
+    kafka:
+      brokers: kafka.example.com:9093
+      topic: lemline-prod
+      group-id: lemline-prod-workers
+      security-protocol: SASL_SSL
+      sasl-mechanism: PLAIN
+      sasl-username: ${LEMLINE_KAFKA_USER}
+      sasl-password: ${LEMLINE_KAFKA_PASSWORD}
+```
+
+<ParamField path="lemline.messaging.kafka.security-protocol" type="string">
+  Security protocol: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`
+</ParamField>
+
+<ParamField path="lemline.messaging.kafka.sasl-mechanism" type="string">
+  SASL mechanism: `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`
+</ParamField>
+
+<ParamField path="lemline.messaging.kafka.sasl-username" type="string">
+  SASL username for authentication
+</ParamField>
+
+<ParamField path="lemline.messaging.kafka.sasl-password" type="string">
+  SASL password. Use environment variables for security.
+</ParamField>
+
+<Warning>
+  Always use environment variables for credentials: `${LEMLINE_KAFKA_PASSWORD}`
+</Warning>
+
+### Kafka Example
+
+```yaml
+lemline:
+  messaging:
+    type: kafka
+    kafka:
+      brokers: kafka-1.prod:9092,kafka-2.prod:9092,kafka-3.prod:9092
+      topic: workflows
+      topic-dlq: workflows-failed
+      group-id: lemline-workers
+```
+
+## RabbitMQ Configuration
+
+Configure RabbitMQ for reliable message queuing:
+
+```yaml
+lemline:
+  messaging:
+    type: rabbitmq
+    rabbitmq:
+      hostname: ${LEMLINE_RABBITMQ_HOST:localhost}
+      port: ${LEMLINE_RABBITMQ_PORT:5672}
+      username: ${LEMLINE_RABBITMQ_USER:guest}
+      password: ${LEMLINE_RABBITMQ_PASSWORD:guest}
+      virtual-host: ${LEMLINE_RABBITMQ_VHOST:/}
+      queue: ${LEMLINE_RABBITMQ_QUEUE_IN:workflows}
+```
+
+### RabbitMQ Parameters
+
+<ParamField path="lemline.messaging.rabbitmq.hostname" type="string" required default="localhost">
+  RabbitMQ server hostname or IP address
+</ParamField>
+
+<ParamField path="lemline.messaging.rabbitmq.port" type="number" required default="5672">
+  RabbitMQ server port (AMQP)
+</ParamField>
+
+<ParamField path="lemline.messaging.rabbitmq.username" type="string" required default="guest">
+  RabbitMQ username
+</ParamField>
+
+<ParamField path="lemline.messaging.rabbitmq.password" type="string" required default="guest">
+  RabbitMQ password. Use environment variables for security.
+</ParamField>
+
+<ParamField path="lemline.messaging.rabbitmq.virtual-host" type="string" default="/">
+  RabbitMQ virtual host for namespace isolation
+</ParamField>
+
+<ParamField path="lemline.messaging.rabbitmq.queue" type="string" default="workflows">
+  Queue name for workflow messages
+</ParamField>
+
+### RabbitMQ Example
+
+```yaml
+lemline:
+  messaging:
+    type: rabbitmq
+    rabbitmq:
+      hostname: rabbitmq.internal.example.com
+      port: 5672
+      username: lemline_app
+      password: ${LEMLINE_RABBITMQ_PASSWORD}
+      virtual-host: /production
+      queue: workflow-commands
+```
+
+## PGMQ Configuration
+
+Configure PGMQ (PostgreSQL Message Queue) for PostgreSQL-based messaging:
+
+```yaml
+lemline:
+  messaging:
+    type: pgmq
+    pgmq:
+      host: ${LEMLINE_PGMQ_HOST:localhost}
+      port: ${LEMLINE_PGMQ_PORT:5432}
+      database: ${LEMLINE_PGMQ_DB:lemline}
+      username: ${LEMLINE_PGMQ_USER:postgres}
+      password: ${LEMLINE_PGMQ_PASSWORD:postgres}
+```
+
+### PGMQ Parameters
+
+<ParamField path="lemline.messaging.pgmq.host" type="string" required default="localhost">
+  PostgreSQL server hostname or IP address
+</ParamField>
+
+<ParamField path="lemline.messaging.pgmq.port" type="number" required default="5432">
+  PostgreSQL server port
+</ParamField>
+
+<ParamField path="lemline.messaging.pgmq.database" type="string" required default="lemline">
+  Database name for PGMQ tables
+</ParamField>
+
+<ParamField path="lemline.messaging.pgmq.username" type="string" required default="postgres">
+  Database username
+</ParamField>
+
+<ParamField path="lemline.messaging.pgmq.password" type="string" required default="postgres">
+  Database password. Use environment variables for security.
+</ParamField>
+
+<Note>
+  PGMQ uses PostgreSQL for both database storage and messaging. No PostgreSQL extension required.
+</Note>
+
+### PGMQ Example
+
+```yaml
+lemline:
+  messaging:
+    type: pgmq
+    pgmq:
+      host: postgres.example.com
+      port: 5432
+      database: lemline
+      username: lemline_user
+      password: ${LEMLINE_PGMQ_PASSWORD}
+```
+
+## Docker Compose Examples
+
+For local development, start message brokers using Docker Compose:
+
+<Tabs>
+  <Tab title="Kafka">
+    ```bash
+    # Start Kafka + PostgreSQL
+    docker compose -f ./examples/docker-compose.yml --profile kafka-pg up -d
+    ```
+  </Tab>
+  <Tab title="RabbitMQ">
+    ```bash
+    # Start RabbitMQ + PostgreSQL
+    docker compose -f ./examples/docker-compose.yml --profile rabbit-pg up -d
+    ```
+  </Tab>
+  <Tab title="PGMQ">
+    ```bash
+    # Start PostgreSQL (for both DB and messaging)
+    docker compose -f ./examples/docker-compose.yml --profile pgmq up -d
+    ```
+  </Tab>
+</Tabs>
+
+### Default Credentials
+
+**Kafka:**
+- No authentication (development mode)
+- Broker: `localhost:9092`
+- Kafka UI: `http://localhost:8080`
+
+**RabbitMQ:**
+- Username: `guest`
+- Password: `guest`
+- AMQP port: `5672`
+- Management UI: `http://localhost:15672`
+
+**PGMQ:**
+- Uses PostgreSQL credentials (see [Database Configuration](/configuration/database))
+
+<Warning>
+  Development credentials are insecure. Use authentication in production.
+</Warning>
+
+## Horizontal Scaling
+
+Run multiple Lemline workers with the same configuration for load distribution:
+
+```bash
+# Terminal 1
+LEMLINE_CONFIG=./config.yaml java -jar lemline-runner.jar listen
+
+# Terminal 2
+LEMLINE_CONFIG=./config.yaml java -jar lemline-runner.jar listen
+
+# Terminal 3
+LEMLINE_CONFIG=./config.yaml java -jar lemline-runner.jar listen
+```
+
+<Tip>
+  All workers in a consumer group share message processing load automatically.
+</Tip>
+
+## Environment-Specific Configuration
+
+Use Quarkus profiles for different environments:
+
+```yaml
+lemline:
+  messaging:
+    type: kafka
+    kafka:
+      brokers: localhost:9092
+      topic: lemline-dev
+      group-id: lemline-dev-workers
+
+'%prod':
+  lemline:
+    messaging:
+      kafka:
+        brokers: ${KAFKA_BROKERS}
+        topic: lemline-prod
+        group-id: lemline-prod-workers
+        security-protocol: SASL_SSL
+        sasl-mechanism: SCRAM-SHA-256
+        sasl-username: ${KAFKA_USER}
+        sasl-password: ${KAFKA_PASSWORD}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection refused">
+    - Verify broker is running: `docker compose ps`
+    - Check hostname and port settings
+    - Ensure network connectivity
+    - For Kafka, verify all broker addresses are reachable
+  </Accordion>
+  
+  <Accordion title="Authentication failed">
+    - Verify credentials are correct
+    - Check SASL mechanism matches broker configuration
+    - Ensure environment variables are set
+    - For RabbitMQ, verify virtual host access
+  </Accordion>
+  
+  <Accordion title="Topics/queues not found">
+    - Kafka auto-creates topics on first use
+    - RabbitMQ requires queue declaration
+    - Check broker logs for errors
+    - Verify permissions for topic/queue creation
+  </Accordion>
+  
+  <Accordion title="Messages not consumed">
+    - Check consumer group ID matches across workers
+    - Verify topic/queue names are correct
+    - Review broker logs for consumer errors
+    - For Kafka, check consumer lag metrics
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<Columns cols={2}>
+  <Card title="Gateway Configuration" icon="network" href="/configuration/gateway">
+    Configure the gRPC gateway for workflow ingress
+  </Card>
+  <Card title="Analytics Configuration" icon="bar-chart" href="/configuration/analytics">
+    Configure lifecycle event analytics
+  </Card>
+</Columns>
