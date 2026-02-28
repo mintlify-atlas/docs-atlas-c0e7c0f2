@@ -1,0 +1,157 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Lemline",
+  "projectDescription": "Serverless Workflow DSL runtime for existing infrastructure with event-driven, highly efficient orchestration.",
+  "theme": "aspen",
+  "primaryColor": "#2563EB",
+  "lightColor": "#60A5FA",
+  "darkColor": "#1E40AF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "installation"]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/workflow-dsl",
+              "concepts/event-driven-orchestration",
+              "concepts/state-management"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/database",
+              "configuration/messaging",
+              "configuration/gateway",
+              "configuration/analytics"
+            ]
+          },
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "cli/overview",
+              "cli/listen",
+              "cli/gateway",
+              "cli/definition",
+              "cli/instance",
+              "cli/migrate",
+              "cli/config"
+            ]
+          },
+          {
+            "group": "Workflow Tasks",
+            "pages": [
+              "tasks/overview",
+              "tasks/call",
+              "tasks/do",
+              "tasks/fork",
+              "tasks/listen",
+              "tasks/emit",
+              "tasks/switch",
+              "tasks/for",
+              "tasks/try-catch",
+              "tasks/wait",
+              "tasks/set",
+              "tasks/raise",
+              "tasks/run"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/overview",
+              "deployment/docker",
+              "deployment/kubernetes",
+              "deployment/native-image",
+              "deployment/scaling"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/monitoring",
+              "operations/observability",
+              "operations/migrations",
+              "operations/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "gRPC Gateway",
+            "pages": [
+              "api/gateway/overview",
+              "api/gateway/start-workflow",
+              "api/gateway/watch-workflow",
+              "api/gateway/authentication"
+            ]
+          },
+          {
+            "group": "Internal Architecture",
+            "pages": [
+              "api/internal/messaging",
+              "api/internal/protobuf",
+              "api/internal/outbox-pattern"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Workflow Examples",
+            "pages": [
+              "examples/hello-world",
+              "examples/http-calls",
+              "examples/error-handling",
+              "examples/parallel-execution",
+              "examples/event-listeners"
+            ]
+          },
+          {
+            "group": "Integration Examples",
+            "pages": [
+              "examples/kafka-postgresql",
+              "examples/rabbitmq-mysql",
+              "examples/pgmq"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Serverless Workflow DSL v1.0 execution",
+    "Event-driven orchestration with minimal database reliance",
+    "Stateless horizontal scaling",
+    "Support for PostgreSQL, MySQL, Kafka, RabbitMQ, PGMQ",
+    "Native binary compilation with GraalVM",
+    "Built-in metrics and observability",
+    "gRPC gateway API",
+    "CLI for workflow management"
+  ],
+  "publicApiSurface": [
+    "lemline listen - Start workflow message consumer",
+    "lemline gateway start - Start gRPC gateway server",
+    "lemline definition get/post/delete - Manage workflow definitions",
+    "lemline instance start - Start workflow instances",
+    "lemline migrate - Run database migrations",
+    "lemline config - Display configuration",
+    "WorkflowGateway.StartWorkflow - gRPC API to start workflows",
+    "WorkflowGateway.WatchWorkflow - gRPC API to stream workflow events",
+    "StepByStepOrchestrator.start/resume - Core orchestration API",
+    "Workflow definition YAML/JSON - Serverless Workflow DSL"
+  ]
+}
